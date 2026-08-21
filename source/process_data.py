@@ -1,9 +1,8 @@
 from pathlib import Path
 import pandas as pd
 
-
-RAW_DATA_PATH = Path("data/raw_data/output.parquet")
-PROCESSED_DATA_PATH = Path("data/processed_data/cleaned_output.parquet")
+RAW_PATH = Path("data/raw_data")
+PROCESSED_PATH = Path("data/processed_data")
 
 NUMERIC_COLUMNS = [
     "open",
@@ -13,21 +12,7 @@ NUMERIC_COLUMNS = [
     "volume",
 ]
 
-
-def process_data():
-    # Check that the raw data file exists
-    if not RAW_DATA_PATH.exists():
-        raise FileNotFoundError(
-            f"Raw data file not found: {RAW_DATA_PATH}"
-        )
-
-    # Load raw data
-    df = pd.read_parquet(RAW_DATA_PATH)
-
-    print("Original data shape:", df.shape)
-    print("Original columns:")
-    print(df.columns)
-
+def clean_data(df):
     # Convert ticker -> OHLCV MultiIndex columns into rows
     processed_stocks = []
 
@@ -178,12 +163,6 @@ def process_data():
     assert (df["low"] <= df["open"]).all()
     assert (df["low"] <= df["close"]).all()
 
-    # Save the cleaned dataset
-    df.to_parquet(
-        PROCESSED_DATA_PATH,
-        index=False
-    )
-
     # Print processing results
     print("\nDATA PROCESSING COMPLETE")
 
@@ -194,31 +173,81 @@ def process_data():
     print(f"Invalid OHLC rows removed: {number_invalid_ohlc}")
     print(f"Final rows: {len(df)}")
 
-    print(
-        f"Unique tickers: {df['ticker'].nunique()}"
-    )
 
-    print(
-        f"Date range: "
-        f"{df['date'].min()} -> {df['date'].max()}"
-    )
-
-    print(
-        f"Saved to: {PROCESSED_DATA_PATH}"
-    )
-
-    print("\nRows per ticker:")
-    print(
-        df.groupby("ticker")
-        .size()
-        .sort_index()
-    )
-
-    print("\nProcessed data preview:")
     print(df.head())
+    print("Number of columns:", df.shape[1])
+    print("Columns:", df.columns.tolist())
 
     return df
 
+def extract_technicals(df) :
+    # Calculate technical indicators for each stock
+    df = df.sort_values(["ticker", "date"]).copy()
+
+    # Calculate exponential moving averages
+    df["ema_20"] = df.groupby("ticker")["close"].transform(lambda x: x.ewm(span=20, adjust=False).mean())
+    df["ema_50"] = df.groupby("ticker")["close"].transform(lambda x: x.ewm(span=50, adjust=False).mean())
+    df["ema_100"] = df.groupby("ticker")["close"].transform(lambda x: x.ewm(span=100, adjust=False).mean())
+    
+    # Calculate close price relative to EMA
+    df["close_vs_ema20"] = df["close"] / df["ema_20"] - 1
+    df["close_vs_ema50"] = df["close"] / df["ema_50"] - 1
+    df["close_vs_ema100"] = df["close"] / df["ema_100"] - 1
+    
+    # Returns
+    df["return_5d"] = df.groupby("ticker")["close"].pct_change(periods=5)
+    df["return_10d"] = df.groupby("ticker")["close"].pct_change(periods=10)
+    df["return_20d"] = df.groupby("ticker")["close"].pct_change(periods=20)
+
+    # Daily return
+    df["daily_return"] = (df.groupby("ticker")["close"].pct_change())
+
+    # Volatility
+    df["volatility_5d"] = df.groupby("ticker")["daily_return"].transform(lambda x: x.rolling(window=5).std())
+    df["volatility_20d"] = df.groupby("ticker")["daily_return"].transform(lambda x: x.rolling(window=20).std())
+    
+    # Calculate relative strength index (RSI)
+    delta = df.groupby("ticker")["close"].transform(lambda x: x.diff())
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.groupby(df["ticker"]).transform(lambda x: x.rolling(window=14).mean())
+    avg_loss = loss.groupby(df["ticker"]).transform(lambda x: x.rolling(window=14).mean())
+    rs = avg_gain / avg_loss
+    df["rsi"] = 100 - (100 / (1 + rs))
+    
+    # y predictors (outputs)
+    df["future_return_1d"] = (df.groupby("ticker")["close"].shift(-1) / df["close"] - 1)
+
+    return df
+
+def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
+    # Check that the raw data file exists
+    if not RAW_DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"Raw data file not found: {RAW_DATA_PATH}"
+        )
+
+    # Load raw data
+    df = pd.read_parquet(RAW_DATA_PATH)
+    print("Raw data loaded successfully")
+    df = clean_data(df)
+    print("Data cleaned successfully")
+    df = extract_technicals(df)
+    print("Technical indicators extracted successfully")
+    df = df.dropna().reset_index(drop=True)
+    print("Null technical rows removed")
+    print("Final data shape:", df.shape)
+    print("Final data columns:", df.columns.tolist())
+    # Save processed data
+    df.to_parquet(PROCESSED_DATA_PATH, index=False)
 
 if __name__ == "__main__":
-    process_data()
+    process_data(
+        RAW_DATA_PATH=RAW_PATH / "output.parquet",
+        PROCESSED_DATA_PATH=PROCESSED_PATH / "cleaned_output.parquet"
+    )
+    
+    process_data(
+        RAW_DATA_PATH=RAW_PATH / "test_output.parquet",
+        PROCESSED_DATA_PATH=PROCESSED_PATH / "cleaned_test_output.parquet"
+    )
