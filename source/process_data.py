@@ -216,7 +216,7 @@ def extract_technicals(df) :
     df["rsi"] = 100 - (100 / (1 + rs))
     
     # y predictors (outputs)
-    df["future_return_1d"] = (df.groupby("ticker")["close"].shift(-1) / df["close"] - 1)
+    df["future_return_5d"] = (df.groupby("ticker")["close"].shift(-5) / df["close"] - 1)
 
     return df
 
