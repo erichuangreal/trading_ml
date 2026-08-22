@@ -5,10 +5,6 @@ from joblib import load
 
 test_data = pd.read_parquet("data/processed_data/cleaned_output.parquet")
 
-MODEL_PATH = Path("models/ridge_2026-08-21_18-25-17/model.joblib")
-
-clf = load(MODEL_PATH)
-
 features = [
         "close_vs_ema20",
         "close_vs_ema50",
@@ -22,13 +18,21 @@ features = [
     ]
 y_test = test_data["future_return_5d"]
 
-predictions = clf.predict(test_data[features])
+def test_model(model_name, test_data, features, y_test):
+    MODEL_PATH = Path("models") / model_name / "model.joblib"
+    clf = load(MODEL_PATH)
+    
+    predictions = clf.predict(test_data[features])
 
-direction_accuracy = (
-    (predictions > 0) == (y_test > 0)
-).mean()
+    direction_accuracy = (
+        (predictions > 0) == (y_test > 0)
+    ).mean()
+    print("Directional accuracy for model: ", model_name, direction_accuracy)
+
 
 always_up_accuracy = (y_test > 0).mean()
-
-print("Directional accuracy:", direction_accuracy)
 print("Always up accuracy:", always_up_accuracy)
+
+test_model("ridge_2026-08-21_18-25-17", test_data, features, y_test)
+test_model("random_forest_2026-08-22_01-29-38", test_data, features, y_test)
+test_model("xgboost_2026-08-22_01-29-38", test_data, features, y_test)
