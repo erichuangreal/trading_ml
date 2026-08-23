@@ -30,7 +30,7 @@ def download_data(start, end, output_path) :
     return df
 
 if __name__ == "__main__":
-    training_data = download_data("2020-01-01", "2024-01-01", "data/raw_data/output.parquet")
+    training_data = download_data("2020-01-01", "2025-01-01", "data/raw_data/output.parquet")
     print("Training data downloaded and saved.")
-    test_data = download_data("2024-01-02", "2025-01-01", "data/raw_data/test_output.parquet")
+    test_data = download_data("2025-01-02", "2025-02-02", "data/raw_data/test_output.parquet")
     print("Test data downloaded and saved.")

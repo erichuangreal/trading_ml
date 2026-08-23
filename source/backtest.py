@@ -3,7 +3,7 @@ from sklearn.linear_model import RidgeCV
 from pathlib import Path
 from joblib import load
 
-test_data = pd.read_parquet("data/processed_data/cleaned_output.parquet")
+test_data = pd.read_parquet("data/processed_data/cleaned_test_output.parquet")
 
 features = [
         "close_vs_ema20",
@@ -16,7 +16,7 @@ features = [
         "volatility_20d",
         "rsi"
     ]
-y_test = test_data["future_return_5d"]
+y_test = test_data["future_return_1d"]
 
 def test_model(model_name, test_data, features, y_test):
     MODEL_PATH = Path("models") / model_name / "model.joblib"
@@ -34,5 +34,5 @@ always_up_accuracy = (y_test > 0).mean()
 print("Always up accuracy:", always_up_accuracy)
 
 test_model("ridge_2026-08-21_18-25-17", test_data, features, y_test)
-test_model("random_forest_2026-08-22_01-29-38", test_data, features, y_test)
-test_model("xgboost_2026-08-22_01-29-38", test_data, features, y_test)
+test_model("random_forest_tuned_2026-08-22_02-15-15", test_data, features, y_test)
+test_model("xgboost_tuned_2026-08-22_02-15-17", test_data, features, y_test)

@@ -38,7 +38,7 @@ def ridge_regression(test_data):
         "rsi"
     ]
     x = test_data[features]
-    y = test_data["future_return_5d"]
+    y = test_data["future_return_1d"]
     pipeline = make_pipeline(StandardScaler(), RidgeCV(alphas=[1e-3, 1e-2, 1e-1, 1, 10, 100]))
     clf = pipeline.fit(x, y)
     r2 = clf.score(x, y)
