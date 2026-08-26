@@ -19,6 +19,7 @@ from walkforward import (
     load_data,
     directional_accuracy,
     always_up_accuracy,
+    rank_ic,
 )
 from rank_testing import report_ranks
 from features import FEATURES
@@ -31,9 +32,6 @@ test_data = pd.read_parquet("data/processed_data/cleaned_test_output.parquet")
 train_data = train_data.sort_values(["date", "ticker"]).reset_index(drop=True)
 test_data = test_data.sort_values(["date", "ticker"]).reset_index(drop=True)
 
-
-# Best params from the last grid search. Update these after re-running the
-# tuners; walk_forward refits with them but never re-tunes.
 RF_BEST = {
     "n_estimators": 200,
     "max_depth": 10,
@@ -47,11 +45,7 @@ XGB_BEST = {
 
 def random_forest_pipeline(n_estimators=200, max_depth=5, random_state=42,
                            max_features="sqrt", min_samples_leaf=50):
-    """The RandomForest pipeline, unfitted. Shared by training and walk-forward.
-
-    max_features and min_samples_leaf must match what tune_random_forest searched
-    under, or the tuned n_estimators/max_depth are being applied to a different model.
-    """
+    """The RandomForest pipeline, unfitted. Shared by training and walk-forward."""
     return make_pipeline(
         StandardScaler(),
         RandomForestRegressor(
@@ -152,10 +146,7 @@ def tune_random_forest(train_data, test_data):
         RandomForestRegressor(
             random_state=42,
             n_jobs=-1,
-            # Default is every feature at every split, which is slow and leaves the
-            # trees correlated. sqrt(22) is ~5 per split.
             max_features="sqrt",
-            # A leaf holding a handful of rows is fitting noise at this signal level.
             min_samples_leaf=50,
         )
     )
@@ -167,8 +158,8 @@ def tune_random_forest(train_data, test_data):
 
     print("Tuning RandomForest (4 combinations, 5-fold CV)...")
     start_time = time.time()
-    directional_scorer = make_scorer(directional_accuracy)
-    grid_search = GridSearchCV(pipeline, param_grid, cv = TimeSeriesSplit(n_splits=5), scoring = directional_scorer, n_jobs=-1, verbose=1)
+    ic_scorer = make_scorer(rank_ic)
+    grid_search = GridSearchCV(pipeline, param_grid, cv = TimeSeriesSplit(n_splits=5), scoring = ic_scorer, n_jobs=-1, verbose=1)
     grid_search.fit(x, y)
     
     elapsed_time = time.time() - start_time
@@ -226,8 +217,8 @@ def tune_xgboost(train_data, test_data):
 
     print("Tuning XGBoost (27 combinations, 5-fold CV)...")
     start_time = time.time()
-    directional_scorer = make_scorer(directional_accuracy)
-    grid_search = GridSearchCV(pipeline, param_grid, cv = TimeSeriesSplit(n_splits=5), scoring = directional_scorer, n_jobs=-1, verbose=1)
+    ic_scorer = make_scorer(rank_ic)
+    grid_search = GridSearchCV(pipeline, param_grid, cv = TimeSeriesSplit(n_splits=5), scoring = ic_scorer, n_jobs=-1, verbose=1)
     grid_search.fit(x, y)
 
     elapsed_time = time.time() - start_time
@@ -267,8 +258,8 @@ def tune_xgboost(train_data, test_data):
 
 if __name__ == "__main__":
     RUN_BASELINE = False  
-    RUN_TUNING = True      
-    RUN_WALKFORWARD = False 
+    RUN_TUNING = False      
+    RUN_WALKFORWARD = True 
 
     if RUN_BASELINE:
         print("RandomForest R2 Score:", random_forest()[0])

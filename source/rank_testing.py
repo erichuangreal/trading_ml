@@ -24,6 +24,24 @@ MODELS_PATH = Path("models")
 TARGET = "future_return_1d"
 TOP_N = 3
 
+TRADING_DAYS = 252
+
+# Round-trip cost of turning the whole book over, as a fraction. A top-N long/short
+# rebalanced daily replaces both legs every day, so this is charged in full each
+# day. 15 bps is mid-range for liquid US large caps once spread, commission and
+# slippage are counted.
+DAILY_COST = 0.0015
+
+
+def sharpe(daily_returns, cost=0.0):
+    """Annualised return per unit of risk, optionally net of a per-day cost."""
+    excess = daily_returns - cost
+
+    if len(excess) < 2 or excess.std() == 0:
+        return float("nan")
+
+    return excess.mean() / excess.std() * np.sqrt(TRADING_DAYS)
+
 
 def load_predictions(run_dir=None):
     """Load predictions.parquet from a walk-forward run. Defaults to the newest."""
@@ -127,6 +145,12 @@ def top_n_summary(daily, days, n, tickers_per_day):
     overlap_chance = n * n / tickers_per_day
     vol_ratio = daily["top_volatility"].mean() / daily["universe_volatility"].mean()
 
+    # Long the top N, short the bottom N -- the market-neutral book, and the only
+    # version where the return is attributable to the ranking rather than to the
+    # market's direction.
+    gross_sharpe = sharpe(daily["spread"])
+    net_sharpe = sharpe(daily["spread"], DAILY_COST)
+
     return [
         f"TOP {n} -- ranked by pred / volatility_20d",
         f"  Mean actual percentile: {mean_rank:.4f}   (0.5000 = no skill)",
@@ -135,6 +159,13 @@ def top_n_summary(daily, days, n, tickers_per_day):
         f"  Excess return:          {excess * 10000:+.2f} bps/day vs universe",
         f"  Top-minus-bottom {n}:     {spread * 10000:+.2f} bps/day",
         f"  Volatility of picks:    {vol_ratio:.2f}x universe   (1.00 = same risk)",
+        "",
+        f"  LONG/SHORT TOP-BOTTOM {n}",
+        f"    Daily spread:     {spread * 10000:+.2f} bps",
+        f"    Daily volatility: {daily['spread'].std() * 10000:.2f} bps",
+        f"    Gross Sharpe:     {gross_sharpe:+.2f}   (1.0 = good fund, 2.0 = excellent)",
+        f"    Cost assumption:  {DAILY_COST * 10000:.1f} bps/day round trip",
+        f"    Net Sharpe:       {net_sharpe:+.2f}   <- the number that decides if this is tradeable",
     ]
 
 
@@ -165,6 +196,8 @@ def report_ranks(pooled, run_name, n=TOP_N):
 
     monthly["top_rank"] = by_month["mean_actual_rank"].mean()
     monthly["excess_bps"] = by_month["excess_return"].mean() * 10000
+    monthly["spread_bps"] = by_month["spread"].mean() * 10000
+    monthly["net_sharpe"] = by_month["spread"].apply(lambda s: sharpe(s, DAILY_COST))
 
     lines = [
         f"Run: {run_name}",

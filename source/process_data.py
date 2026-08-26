@@ -2,7 +2,6 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from features import add_cross_sectional_ranks
 from fundamentals import build_fundamental_features, merge_fundamentals
 
 RAW_PATH = Path("data/raw_data")
@@ -299,8 +298,6 @@ def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
     print("Technical indicators extracted successfully")
     df = df.dropna().reset_index(drop=True)
     print("Null technical rows removed")
-    df = add_cross_sectional_ranks(df)
-    print("Cross-sectional ranks added")
 
     # Merged after dropna so sparse fundamentals cannot delete technical rows.
     fundamentals_path = RAW_PATH / "fundamentals.parquet"

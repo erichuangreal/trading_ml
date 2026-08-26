@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from sklearn.base import clone
 from sklearn.metrics import r2_score
+from scipy.stats import spearmanr
 from joblib import dump
 import time
 
@@ -32,6 +33,15 @@ def directional_accuracy(y_true, y_pred):
 
 def always_up_accuracy(y_test):
     return (y_test > 0).mean()
+
+
+def rank_ic(y_true, y_pred):
+    """Spearman correlation between predicted and actual ordering.
+    Uses rank N to choose the best parameters.
+    """
+    correlation = spearmanr(y_true, y_pred).statistic
+
+    return 0.0 if np.isnan(correlation) else correlation
 
 
 def load_data():
@@ -122,7 +132,12 @@ def report_walkforward(name, model_label, params, pooled, elapsed_time, final_mo
     run_path = MODELS_PATH / run_name
     run_path.mkdir(parents=True, exist_ok=True)
 
-    if final_model is not None:
+    # A dict means one model per seed -- save them all, since averaging their
+    # predictions is what reproduces the ensemble that was scored above.
+    if isinstance(final_model, dict):
+        for seed, fitted in final_model.items():
+            dump(fitted, run_path / f"model_seed{seed}.joblib")
+    elif final_model is not None:
         dump(final_model, run_path / "model.joblib")
 
     pooled.to_parquet(run_path / "predictions.parquet", index=False)

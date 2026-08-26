@@ -99,3 +99,47 @@ MODEL CONCLUSION: Ridge and RandomForest models will not be tested from now on a
 
 ### Version 3
 - Implement fundamental metrics (earnings, dividends, P/E, etc.) in an attempt to increase model prediction accuracy
+- Goal: *IC ≈ 0.03, reproduced across two test years, at a horizon where costs leave net Sharpe above 1.0.*
+
+Best performing model:
+### Model Scorecard
+
+**Run:** `xgboost_walkforward_2026-08-26_01-30-11`
+**Config:** XGBoost `200/7/0.01` · 22 technicals · expanding · retrain 5d
+
+| Metric | Value | No-skill | Good |
+|---|---|---|---|
+| **Median split edge** | **+1.04pp** | 0 | >1.6pp |
+| **t-stat** | **2.10** | 0 | >2.0 |
+| **Months won** | **8/12** | 6/12 | 9/12 |
+| **Top-3 minus bottom-3** | **+13.78 bps/day** | 0 | >30 bps |
+| **Gross Sharpe** | **+0.92** | 0 | >1.0 |
+| **Net Sharpe** | **−0.08** | 0 | >1.0 |
+| Top-3 percentile | 0.5075 | 0.5000 | >0.52 |
+| Volatility of picks | 1.43x | 1.00x | ~1.0x |
+| Directional edge | −0.0000 | 0 | dead metric |
+
+**Noise floor: ±0.5pp on edge.** Two runs of the same config gave +1.04 and +1.32.
+Top-3 percentile carries ±1pp — only 3 observations/day, so treat it as a sanity check.
+Spread benchmark assumes daily rebalancing at 15 bps cost; a longer horizon lowers it.
+
+### Tested with Different Seeds
+
+Averaged across 5 seeds:
+
+`[42, 7, 123, 2024, 31337]`
+
+**Mean disagreement between seeds:** `0.000146`
+
+#### Median Split by Seed
+
+| Seed | Median Split |
+|---:|---:|
+| 42 | 0.5098 |
+| 7 | 0.5099 |
+| 123 | 0.5095 |
+| 2024 | 0.5107 |
+| 31337 | 0.5090 |
+
+Results: the variance between different seeds is negligble, so I dropped seed averaging and stuck to a constant SEED = 42
+
