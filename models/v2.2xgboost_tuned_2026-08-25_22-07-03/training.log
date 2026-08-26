@@ -1,0 +1,9 @@
+Run: xgboost_tuned_2026-08-25_22-07-03
+Model: XGBRegressor (Tuned)
+Best Params: {'xgbregressor__learning_rate': 0.01, 'xgbregressor__max_depth': 7, 'xgbregressor__n_estimators': 200}
+Best CV Score: 0.5159258850777545
+Tuning Time: 10.66s
+TESTING RESULTS:
+Always Up Accuracy: 0.5162
+Directional Accuracy on Test Set: 0.5181
+R2 Score on Test Set: -0.0015

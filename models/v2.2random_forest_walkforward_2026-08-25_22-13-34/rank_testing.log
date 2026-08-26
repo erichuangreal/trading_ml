@@ -1,0 +1,58 @@
+Run: random_forest_walkforward_2026-08-25_22-13-34
+Scored: 2026-08-25 22:13:34
+Test period: 2025-01-02 to 2025-12-30
+Days: 249
+Rows: 22410
+Tickers per day: 90.0
+
+MEDIAN SPLIT
+  Did the model put each ticker on the right side of the day's median?
+  Rank Accuracy:  0.5088
+  Baseline:       0.5000
+  Edge:           +0.0088
+
+TOP 3 -- raw pred
+  Mean actual percentile: 0.4996   (0.5000 = no skill)
+  Beat median:            0.4846   (0.5000 = no skill)
+  In actual top 3:         0.2369   (0.1000 by chance)
+  Excess return:          +1.89 bps/day vs universe
+  Top-minus-bottom 3:     -13.69 bps/day
+  Volatility of picks:    2.12x universe   (1.00 = same risk)
+
+TOP 3 -- risk-adjusted (pred / volatility_20d)
+  Mean actual percentile: 0.5066   (0.5000 = no skill)
+  Beat median:            0.5033   (0.5000 = no skill)
+  In actual top 3:         0.1205   (0.1000 by chance)
+  Excess return:          -0.53 bps/day vs universe
+  Top-minus-bottom 3:     -5.52 bps/day
+  Volatility of picks:    1.34x universe   (1.00 = same risk)
+
+MONTH BY MONTH:
+         days  accuracy  top_rank  excess_bps  top_rank_ra  excess_bps_ra
+date                                                                     
+2025-01    20    0.5233    0.5056     31.4753       0.5400        19.8230
+2025-02    19    0.4912    0.4573    -51.7907       0.4696       -32.7015
+2025-03    21    0.4984    0.4970    -18.8520       0.5400         2.4697
+2025-04    21    0.5206    0.5616     63.2900       0.5568        62.7584
+2025-05    21    0.4783    0.5085     30.3138       0.4734       -27.5625
+2025-06    20    0.5267    0.4928    -10.6572       0.4463       -35.4504
+2025-07    22    0.5040    0.4857      4.5812       0.5195        -0.6524
+2025-08    21    0.5386    0.5029      9.4464       0.5142        20.4888
+2025-09    21    0.5069    0.5737     67.3989       0.5210        11.7019
+2025-10    23    0.5188    0.5340      5.4987       0.5003        -7.9752
+2025-11    19    0.4912    0.3846   -104.9835       0.4546       -41.0090
+2025-12    21    0.5048    0.4735    -18.0396       0.5339        14.7997
+
+WORST 3 DAYS BY TOP-3 RETURN (risk-adjusted):
+                      picks  top_return  universe_return  mean_actual_rank
+date                                                                      
+2025-04-02  MDB, MRVL, MRNA     -0.0951          -0.0528            0.2259
+2025-04-03  MRNA, MDB, MRVL     -0.0635          -0.0568            0.4852
+2025-03-25   MDB, TTD, SMCI     -0.0551          -0.0108            0.1148
+
+BEST 3 DAYS BY TOP-3 RETURN (risk-adjusted):
+                       picks  top_return  universe_return  mean_actual_rank
+date                                                                       
+2025-04-08    TTD, MDB, MRVL      0.1962           0.1115            0.8926
+2025-04-23       MU, ON, TTD      0.0722           0.0285            0.9074
+2025-09-10  LULU, SNPS, CTAS      0.0522           0.0122            0.7370

@@ -31,38 +31,69 @@ train_data = train_data.sort_values(["date", "ticker"]).reset_index(drop=True)
 test_data = test_data.sort_values(["date", "ticker"]).reset_index(drop=True)
 
 FEATURES = [
+    # Trend
     "close_vs_ema20",
     "close_vs_ema50",
     "close_vs_ema100",
+
+    # Momentum
     "return_5d",
     "return_10d",
     "return_20d",
+
+    # Volatility
     "volatility_5d",
     "volatility_20d",
-    "rsi"
+
+    # Reversal / exhaustion
+    "rsi",
+    "bollinger_zscore",
+    "range_position_20d",
+
+    # Liquidity / structure
+    "close_vs_prev_week_high",
+    "close_vs_prev_week_low",
+    "close_vs_prev_month_high",
+    "close_vs_prev_month_low",
+    "close_vs_20d_high",
+    "close_vs_20d_low",
+    "close_vs_50d_high",
+    "close_vs_50d_low",
+
+    # Rejection
+    "upper_wick_pct",
+    "lower_wick_pct",
+    "body_pct",
 ]
 
 # Best params from the last grid search. Update these after re-running the
 # tuners; walk_forward refits with them but never re-tunes.
 RF_BEST = {
-    "n_estimators": 100,
+    "n_estimators": 200,
     "max_depth": 10,
 }
 
 XGB_BEST = {
-    "n_estimators": 50,
-    "max_depth": 3,
-    "learning_rate": 0.1,
+    "n_estimators": 200,
+    "max_depth": 7,
+    "learning_rate": 0.01,
 }
 
-def random_forest_pipeline(n_estimators=200, max_depth=5, random_state=42):
-    """The RandomForest pipeline, unfitted. Shared by training and walk-forward."""
+def random_forest_pipeline(n_estimators=200, max_depth=5, random_state=42,
+                           max_features="sqrt", min_samples_leaf=50):
+    """The RandomForest pipeline, unfitted. Shared by training and walk-forward.
+
+    max_features and min_samples_leaf must match what tune_random_forest searched
+    under, or the tuned n_estimators/max_depth are being applied to a different model.
+    """
     return make_pipeline(
         StandardScaler(),
         RandomForestRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
             random_state=random_state,
+            max_features=max_features,
+            min_samples_leaf=min_samples_leaf,
             n_jobs=-1
         )
     )
@@ -152,15 +183,23 @@ def tune_random_forest(train_data, test_data):
 
     pipeline = make_pipeline(
         StandardScaler(),
-        RandomForestRegressor(random_state=42, n_jobs=-1)
+        RandomForestRegressor(
+            random_state=42,
+            n_jobs=-1,
+            # Default is every feature at every split, which is slow and leaves the
+            # trees correlated. sqrt(22) is ~5 per split.
+            max_features="sqrt",
+            # A leaf holding a handful of rows is fitting noise at this signal level.
+            min_samples_leaf=50,
+        )
     )
 
     param_grid = {
-        'randomforestregressor__n_estimators': [50, 100, 200],
-        'randomforestregressor__max_depth': [5, 10, 15, 20],
+        'randomforestregressor__n_estimators': [100, 200],
+        'randomforestregressor__max_depth': [5, 10],
     }
 
-    print("Tuning RandomForest (27 combinations, 5-fold CV)...")
+    print("Tuning RandomForest (4 combinations, 5-fold CV)...")
     start_time = time.time()
     directional_scorer = make_scorer(directional_accuracy)
     grid_search = GridSearchCV(pipeline, param_grid, cv = TimeSeriesSplit(n_splits=5), scoring = directional_scorer, n_jobs=-1, verbose=1)
@@ -279,7 +318,8 @@ if __name__ == "__main__":
         data = load_data()
 
         models = [
-            ("random_forest", "RandomForestRegressor", random_forest_pipeline(**RF_BEST), RF_BEST),
+            # random forest is now discontinued
+            #("random_forest", "RandomForestRegressor", random_forest_pipeline(**RF_BEST), RF_BEST),
             ("xgboost", "XGBRegressor", xgboost_pipeline(**XGB_BEST), XGB_BEST),
         ]
 

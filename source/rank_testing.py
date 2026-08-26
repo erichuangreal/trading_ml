@@ -75,23 +75,22 @@ def median_test(pooled):
     return daily
 
 
-def top_n_test(pooled, n=TOP_N, risk_adjusted=False):
+def top_n_test(pooled, n=TOP_N):
     """Where the model's n highest-ranked tickers actually landed each day.
 
-    risk_adjusted divides the prediction by recent volatility, so the ranking asks
-    for the best return per unit of risk. Without it, high-volatility names win on
-    raw predicted magnitude alone and the picks are a bet on beta, not direction.
+    Ranks on predicted return per unit of risk. Ranking on the raw prediction
+    instead picks whatever is most volatile -- a regressor trained on absolute
+    returns outputs bigger numbers for bigger-moving stocks, so magnitude tracks
+    volatility rather than confidence. Measured at 2.1x universe volatility with
+    a worse spread, so it is not worth keeping as an option.
     """
     rows = []
 
     for date, day in pooled.groupby("date"):
         day = day.copy()
 
-        if risk_adjusted:
-            # Zero volatility would divide to inf and hijack nlargest.
-            day["score"] = day["pred"] / day["volatility_20d"].replace(0, np.nan)
-        else:
-            day["score"] = day["pred"]
+        # Zero volatility would divide to inf and hijack nlargest.
+        day["score"] = day["pred"] / day["volatility_20d"].replace(0, np.nan)
 
         top = day.nlargest(n, "score")
         bottom = day.nsmallest(n, "score")
@@ -118,8 +117,8 @@ def top_n_test(pooled, n=TOP_N, risk_adjusted=False):
     return daily
 
 
-def top_n_summary(daily, days, n, tickers_per_day, label):
-    """Format one top-N block for the log."""
+def top_n_summary(daily, days, n, tickers_per_day):
+    """Format the top-N block for the log."""
     mean_rank = daily["mean_actual_rank"].mean()
     hit_rate = daily["beat_median"].sum() / (days * n)
     excess = daily["excess_return"].mean()
@@ -129,7 +128,7 @@ def top_n_summary(daily, days, n, tickers_per_day, label):
     vol_ratio = daily["top_volatility"].mean() / daily["universe_volatility"].mean()
 
     return [
-        f"TOP {n} -- {label}",
+        f"TOP {n} -- ranked by pred / volatility_20d",
         f"  Mean actual percentile: {mean_rank:.4f}   (0.5000 = no skill)",
         f"  Beat median:            {hit_rate:.4f}   (0.5000 = no skill)",
         f"  In actual top {n}:         {overlap:.4f}   ({overlap_chance:.4f} by chance)",
@@ -144,8 +143,7 @@ def report_ranks(pooled, run_name, n=TOP_N):
     pooled = add_ranks(pooled)
 
     daily_median = median_test(pooled)
-    daily_top = top_n_test(pooled, n, risk_adjusted=False)
-    daily_top_ra = top_n_test(pooled, n, risk_adjusted=True)
+    daily_top = top_n_test(pooled, n)
 
     days = len(daily_median)
     tickers_per_day = daily_median["tickers"].mean()
@@ -154,24 +152,19 @@ def report_ranks(pooled, run_name, n=TOP_N):
     accuracy = pooled["rank_correct"].mean()
     baseline = pooled["actual_beats"].mean()
 
-    # --- top N, scored both ways so the comparison is in one run ---
+    # --- top N ---
     # A model with no skill lands its picks at the middle of the pack (0.5),
     # gets half of them over the median, and earns the universe average.
-    raw_block = top_n_summary(daily_top, days, n, tickers_per_day, "raw pred")
-    ra_block = top_n_summary(daily_top_ra, days, n, tickers_per_day,
-                             "risk-adjusted (pred / volatility_20d)")
+    top_block = top_n_summary(daily_top, days, n, tickers_per_day)
 
     monthly = daily_median.groupby(daily_median.index.to_period("M")).agg(
         days=("accuracy", "size"),
         accuracy=("accuracy", "mean"),
     )
     by_month = daily_top.groupby(daily_top.index.to_period("M"))
-    by_month_ra = daily_top_ra.groupby(daily_top_ra.index.to_period("M"))
 
     monthly["top_rank"] = by_month["mean_actual_rank"].mean()
     monthly["excess_bps"] = by_month["excess_return"].mean() * 10000
-    monthly["top_rank_ra"] = by_month_ra["mean_actual_rank"].mean()
-    monthly["excess_bps_ra"] = by_month_ra["excess_return"].mean() * 10000
 
     lines = [
         f"Run: {run_name}",
@@ -187,20 +180,18 @@ def report_ranks(pooled, run_name, n=TOP_N):
         f"  Baseline:       {baseline:.4f}",
         f"  Edge:           {accuracy - baseline:+.4f}",
         "",
-        *raw_block,
-        "",
-        *ra_block,
+        *top_block,
         "",
         "MONTH BY MONTH:",
         monthly.to_string(float_format=lambda v: f"{v:.4f}"),
         "",
-        f"WORST {n} DAYS BY TOP-{n} RETURN (risk-adjusted):",
-        daily_top_ra.nsmallest(n, "top_return")[
+        f"WORST {n} DAYS BY TOP-{n} RETURN:",
+        daily_top.nsmallest(n, "top_return")[
             ["picks", "top_return", "universe_return", "mean_actual_rank"]
         ].to_string(float_format=lambda v: f"{v:.4f}"),
         "",
-        f"BEST {n} DAYS BY TOP-{n} RETURN (risk-adjusted):",
-        daily_top_ra.nlargest(n, "top_return")[
+        f"BEST {n} DAYS BY TOP-{n} RETURN:",
+        daily_top.nlargest(n, "top_return")[
             ["picks", "top_return", "universe_return", "mean_actual_rank"]
         ].to_string(float_format=lambda v: f"{v:.4f}"),
     ]
@@ -216,11 +207,10 @@ def report_ranks(pooled, run_name, n=TOP_N):
 
     daily_median.to_parquet(run_path / "rank_daily_median.parquet")
     daily_top.to_parquet(run_path / "rank_daily_top.parquet")
-    daily_top_ra.to_parquet(run_path / "rank_daily_top_riskadj.parquet")
 
     print(f"\nSaved to {run_path / 'rank_testing.log'}")
 
-    return daily_median, daily_top, daily_top_ra
+    return daily_median, daily_top
 
 
 if __name__ == "__main__":

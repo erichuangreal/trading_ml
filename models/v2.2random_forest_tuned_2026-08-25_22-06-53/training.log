@@ -1,0 +1,9 @@
+Run: random_forest_tuned_2026-08-25_22-06-53
+Model: RandomForestRegressor (Tuned)
+Best Params: {'randomforestregressor__max_depth': 10, 'randomforestregressor__n_estimators': 200}
+Best CV Score: 0.5158817690526083
+Tuning Time: 474.70s
+TESTING RESULTS:
+Always Up Accuracy: 0.5162
+Directional Accuracy on Test Set: 0.5186
+R2 Score on Test Set: 0.0003

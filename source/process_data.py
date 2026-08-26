@@ -1,5 +1,6 @@
 from pathlib import Path
 import pandas as pd
+import numpy as np
 
 RAW_PATH = Path("data/raw_data")
 PROCESSED_PATH = Path("data/processed_data")
@@ -180,8 +181,32 @@ def clean_data(df):
 
     return df
 
+# used for liqudity and structure calculations
+def add_prior_period_extremes(df, freq, label):
+    df = df.assign(_period=df["date"].dt.to_period(freq))
+
+    extremes = (
+        df.groupby(["ticker", "_period"])
+        .agg(_high=("high", "max"), _low=("low", "min"))
+        .reset_index()
+    )
+
+    extremes[f"{label}_high"] = extremes.groupby("ticker")["_high"].shift(1)
+    extremes[f"{label}_low"] = extremes.groupby("ticker")["_low"].shift(1)
+
+    df = df.merge(
+        extremes[["ticker", "_period", f"{label}_high", f"{label}_low"]],
+        on=["ticker", "_period"],
+        how="left",
+    )
+
+    df[f"close_vs_{label}_high"] = df["close"] / df[f"{label}_high"] - 1
+    df[f"close_vs_{label}_low"] = df["close"] / df[f"{label}_low"] - 1
+
+    return df.drop(columns=["_period", f"{label}_high", f"{label}_low"])
+
+
 def extract_technicals(df) :
-    # Calculate technical indicators for each stock
     df = df.sort_values(["ticker", "date"]).copy()
 
     # Calculate exponential moving averages
@@ -214,20 +239,54 @@ def extract_technicals(df) :
     avg_loss = loss.groupby(df["ticker"]).transform(lambda x: x.rolling(window=14).mean())
     rs = avg_gain / avg_loss
     df["rsi"] = 100 - (100 / (1 + rs))
-    
-    # y predictors (outputs)
+
+    # Reversals
+    sma_20 = df.groupby("ticker")["close"].transform(lambda x: x.rolling(window=20).mean())
+    std_20 = df.groupby("ticker")["close"].transform(lambda x: x.rolling(window=20).std())
+    df["bollinger_zscore"] = (df["close"] - sma_20) / std_20.replace(0, np.nan)
+
+    high_20d = df.groupby("ticker")["high"].transform(lambda x: x.rolling(window=20).max())
+    low_20d = df.groupby("ticker")["low"].transform(lambda x: x.rolling(window=20).min())
+
+    # 0 = sitting on the 20d low, 1 = sitting on the 20d high
+    df["range_position_20d"] = (df["close"] - low_20d) / (high_20d - low_20d).replace(0, np.nan)
+
+    # Distance from recent extremes
+    df["close_vs_20d_high"] = df["close"] / high_20d - 1
+    df["close_vs_20d_low"] = df["close"] / low_20d - 1
+
+    high_50d = df.groupby("ticker")["high"].transform(lambda x: x.rolling(window=50).max())
+    low_50d = df.groupby("ticker")["low"].transform(lambda x: x.rolling(window=50).min())
+    df["close_vs_50d_high"] = df["close"] / high_50d - 1
+    df["close_vs_50d_low"] = df["close"] / low_50d - 1
+
+    # Liquidity + structure: previous completed week and month
+    df = add_prior_period_extremes(df, "W", "prev_week")
+    df = add_prior_period_extremes(df, "M", "prev_month")
+    df = df.sort_values(["ticker", "date"]).reset_index(drop=True)
+
+    # Rejection
+    candle_range = (df["high"] - df["low"]).replace(0, np.nan)
+    body_top = df[["open", "close"]].max(axis=1)
+    body_bottom = df[["open", "close"]].min(axis=1)
+
+    df["upper_wick_pct"] = (df["high"] - body_top) / candle_range
+    df["lower_wick_pct"] = (body_bottom - df["low"]) / candle_range
+
+    # Body size relative to candle high and low
+    df["body_pct"] = (df["close"] - df["open"]) / candle_range
+
+    # y predictors (forward returns)
     df["future_return_1d"] = (df.groupby("ticker")["close"].shift(-1) / df["close"] - 1)
 
     return df
 
 def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
-    # Check that the raw data file exists
     if not RAW_DATA_PATH.exists():
         raise FileNotFoundError(
             f"Raw data file not found: {RAW_DATA_PATH}"
         )
 
-    # Load raw data
     df = pd.read_parquet(RAW_DATA_PATH)
     print("Raw data loaded successfully")
     df = clean_data(df)
