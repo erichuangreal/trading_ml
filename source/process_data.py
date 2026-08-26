@@ -206,7 +206,7 @@ def extract_technicals(df) :
     df["volatility_5d"] = df.groupby("ticker")["daily_return"].transform(lambda x: x.rolling(window=5).std())
     df["volatility_20d"] = df.groupby("ticker")["daily_return"].transform(lambda x: x.rolling(window=20).std())
     
-    # Calculate relative strength index (RSI)
+    # RSI 14 day
     delta = df.groupby("ticker")["close"].transform(lambda x: x.diff())
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -240,14 +240,30 @@ def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
     print("Final data columns:", df.columns.tolist())
     # Save processed data
     df.to_parquet(PROCESSED_DATA_PATH, index=False)
+    
+    return df
 
 if __name__ == "__main__":
-    process_data(
+    
+    #process_data(
+    #    RAW_DATA_PATH=RAW_PATH / "output.parquet",
+    #    PROCESSED_DATA_PATH=PROCESSED_PATH / "cleaned_output.parquet"
+    #)
+
+    #process_data(
+    #    RAW_DATA_PATH=RAW_PATH / "test_output.parquet",
+    #    PROCESSED_DATA_PATH=PROCESSED_PATH / "cleaned_test_output.parquet"
+    #)
+    
+    df = process_data(
         RAW_DATA_PATH=RAW_PATH / "output.parquet",
         PROCESSED_DATA_PATH=PROCESSED_PATH / "cleaned_output.parquet"
     )
-
-    process_data(
-        RAW_DATA_PATH=RAW_PATH / "test_output.parquet",
-        PROCESSED_DATA_PATH=PROCESSED_PATH / "cleaned_test_output.parquet"
-    )
+    
+    split_date = "2025-01-01"
+    
+    train_data = df[df["date"] < split_date]
+    test_data = df[df["date"] >= split_date]
+    
+    train_data.to_parquet(PROCESSED_PATH / "cleaned_train_output.parquet", index=False)
+    test_data.to_parquet(PROCESSED_PATH / "cleaned_test_output.parquet", index=False)

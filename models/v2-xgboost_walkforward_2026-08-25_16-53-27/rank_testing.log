@@ -1,0 +1,50 @@
+Run: xgboost_walkforward_2026-08-25_16-53-27
+Scored: 2026-08-25 16:53:27
+Test period: 2025-01-02 to 2025-12-30
+Days: 249
+Rows: 22410
+Tickers per day: 90.0
+
+MEDIAN SPLIT
+  Did the model put each ticker on the right side of the day's median?
+  Rank Accuracy:  0.5077
+  Baseline:       0.5000
+  Edge:           +0.0077
+
+TOP 3
+  Where the model's 3 highest-ranked tickers actually landed.
+  Mean actual percentile: 0.5097   (0.5000 = no skill)
+  Beat median:            0.4900   (0.5000 = no skill)
+  In actual top 3:         0.2410   (0.1000 by chance)
+  Excess return:          +8.58 bps/day vs universe
+  Top-minus-bottom 3:     +7.59 bps/day
+
+MONTH BY MONTH:
+         days  accuracy  top_rank  excess_bps
+date                                         
+2025-01    20    0.5078    0.5091     54.9869
+2025-02    19    0.4947    0.4507    -61.5518
+2025-03    21    0.4815    0.5081      7.5434
+2025-04    21    0.5132    0.5243     -0.3982
+2025-05    21    0.5206    0.5776     64.5293
+2025-06    20    0.5161    0.4648    -22.7500
+2025-07    22    0.5152    0.4956    -16.5568
+2025-08    21    0.5143    0.4876      2.2872
+2025-09    21    0.5048    0.5490     66.0594
+2025-10    23    0.5300    0.5778     86.0490
+2025-11    19    0.4813    0.4010   -122.8422
+2025-12    21    0.5069    0.5464     20.9031
+
+WORST 3 DAYS BY TOP-3 RETURN:
+                      picks  top_return  universe_return  mean_actual_rank
+date                                                                      
+2025-04-02    MDB, SMCI, MU     -0.1111          -0.0528            0.1889
+2025-04-09    PDD, MCHP, MU     -0.0992          -0.0430            0.1259
+2025-02-28  SMCI, TTD, ILMN     -0.0753          -0.0176            0.0667
+
+BEST 3 DAYS BY TOP-3 RETURN:
+                       picks  top_return  universe_return  mean_actual_rank
+date                                                                       
+2025-04-08    AAPL, TTD, PDD      0.1169           0.1115            0.5593
+2025-05-12  SMCI, AXON, MRVL      0.0737           0.0098            0.8630
+2025-01-02  MSTR, TSLA, AVGO      0.0723           0.0171            0.7185

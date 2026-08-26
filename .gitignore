@@ -1,4 +1,4 @@
 .env
 .venv
-models
+data
 __pycache__
