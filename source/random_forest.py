@@ -21,6 +21,7 @@ from walkforward import (
     always_up_accuracy,
 )
 from rank_testing import report_ranks
+from features import FEATURES
 
 MODELS_PATH = Path("models")
 
@@ -30,41 +31,6 @@ test_data = pd.read_parquet("data/processed_data/cleaned_test_output.parquet")
 train_data = train_data.sort_values(["date", "ticker"]).reset_index(drop=True)
 test_data = test_data.sort_values(["date", "ticker"]).reset_index(drop=True)
 
-FEATURES = [
-    # Trend
-    "close_vs_ema20",
-    "close_vs_ema50",
-    "close_vs_ema100",
-
-    # Momentum
-    "return_5d",
-    "return_10d",
-    "return_20d",
-
-    # Volatility
-    "volatility_5d",
-    "volatility_20d",
-
-    # Reversal / exhaustion
-    "rsi",
-    "bollinger_zscore",
-    "range_position_20d",
-
-    # Liquidity / structure
-    "close_vs_prev_week_high",
-    "close_vs_prev_week_low",
-    "close_vs_prev_month_high",
-    "close_vs_prev_month_low",
-    "close_vs_20d_high",
-    "close_vs_20d_low",
-    "close_vs_50d_high",
-    "close_vs_50d_low",
-
-    # Rejection
-    "upper_wick_pct",
-    "lower_wick_pct",
-    "body_pct",
-]
 
 # Best params from the last grid search. Update these after re-running the
 # tuners; walk_forward refits with them but never re-tunes.
@@ -301,8 +267,8 @@ def tune_xgboost(train_data, test_data):
 
 if __name__ == "__main__":
     RUN_BASELINE = False  
-    RUN_TUNING = False      
-    RUN_WALKFORWARD = True 
+    RUN_TUNING = True      
+    RUN_WALKFORWARD = False 
 
     if RUN_BASELINE:
         print("RandomForest R2 Score:", random_forest()[0])
@@ -310,7 +276,7 @@ if __name__ == "__main__":
 
     if RUN_TUNING:
         print("Tuning to find the best parameters...")
-        tune_random_forest(train_data, test_data)
+        # tune_random_forest(train_data, test_data)
         tune_xgboost(train_data, test_data)
 
     if RUN_WALKFORWARD:

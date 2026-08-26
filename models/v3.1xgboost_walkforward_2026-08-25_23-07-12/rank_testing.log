@@ -1,0 +1,50 @@
+Run: xgboost_walkforward_2026-08-25_23-07-12
+Scored: 2026-08-25 23:07:13
+Test period: 2025-01-02 to 2025-12-30
+Days: 249
+Rows: 22410
+Tickers per day: 90.0
+
+MEDIAN SPLIT
+  Did the model put each ticker on the right side of the day's median?
+  Rank Accuracy:  0.5097
+  Baseline:       0.5000
+  Edge:           +0.0097
+
+TOP 3 -- ranked by pred / volatility_20d
+  Mean actual percentile: 0.5216   (0.5000 = no skill)
+  Beat median:            0.5288   (0.5000 = no skill)
+  In actual top 3:         0.1165   (0.1000 by chance)
+  Excess return:          +8.19 bps/day vs universe
+  Top-minus-bottom 3:     +11.61 bps/day
+  Volatility of picks:    1.06x universe   (1.00 = same risk)
+
+MONTH BY MONTH:
+         days  accuracy  top_rank  excess_bps
+date                                         
+2025-01    20    0.5333    0.5561     36.4081
+2025-02    19    0.4702    0.4945    -41.1847
+2025-03    21    0.5101    0.5679     72.8275
+2025-04    21    0.5132    0.5418    -28.5141
+2025-05    21    0.4910    0.4250    -52.9810
+2025-06    20    0.5272    0.5165      6.2125
+2025-07    22    0.5157    0.5434     26.5257
+2025-08    21    0.5370    0.5501     47.5040
+2025-09    21    0.5164    0.5675     35.5104
+2025-10    23    0.5097    0.4871    -17.3546
+2025-11    19    0.4936    0.5193     21.9019
+2025-12    21    0.4952    0.4905     -9.1042
+
+WORST 3 DAYS BY TOP-3 RETURN:
+                       picks  top_return  universe_return  mean_actual_rank
+date                                                                       
+2025-04-02  SMCI, MRVL, ILMN     -0.0886          -0.0528            0.2889
+2025-04-09    MU, ROST, MCHP     -0.0741          -0.0430            0.3481
+2025-02-28  SMCI, ILMN, ODFL     -0.0684          -0.0176            0.1444
+
+BEST 3 DAYS BY TOP-3 RETURN:
+                       picks  top_return  universe_return  mean_actual_rank
+date                                                                       
+2025-04-08    MDLZ, JD, CTAS      0.0562           0.1115            0.2074
+2025-04-23     TXN, TER, AMD      0.0557           0.0285            0.8185
+2025-05-09  MCHP, SMCI, AXON      0.0540           0.0407            0.5963

@@ -2,6 +2,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+from features import add_cross_sectional_ranks
+from fundamentals import build_fundamental_features, merge_fundamentals
+
 RAW_PATH = Path("data/raw_data")
 PROCESSED_PATH = Path("data/processed_data")
 
@@ -12,6 +15,7 @@ NUMERIC_COLUMNS = [
     "close",
     "volume",
 ]
+
 
 def clean_data(df):
     # Convert ticker -> OHLCV MultiIndex columns into rows
@@ -295,6 +299,17 @@ def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
     print("Technical indicators extracted successfully")
     df = df.dropna().reset_index(drop=True)
     print("Null technical rows removed")
+    df = add_cross_sectional_ranks(df)
+    print("Cross-sectional ranks added")
+
+    # Merged after dropna so sparse fundamentals cannot delete technical rows.
+    fundamentals_path = RAW_PATH / "fundamentals.parquet"
+    if fundamentals_path.exists():
+        fundamentals = build_fundamental_features(pd.read_parquet(fundamentals_path))
+        df = merge_fundamentals(df, fundamentals)
+        print("Fundamentals merged")
+    else:
+        print(f"No {fundamentals_path} -- run fundamentals.py to fetch them")
     print("Final data shape:", df.shape)
     print("Final data columns:", df.columns.tolist())
     # Save processed data

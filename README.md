@@ -97,3 +97,5 @@ Two tests:
 
 MODEL CONCLUSION: Ridge and RandomForest models will not be tested from now on as research proves that **XGBoost** is superior.
 
+### Version 3
+- Implement fundamental metrics (earnings, dividends, P/E, etc.) in an attempt to increase model prediction accuracy
