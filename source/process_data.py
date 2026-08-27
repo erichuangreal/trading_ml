@@ -8,6 +8,11 @@ from edgar_fundamentals import attach_edgar
 RAW_PATH = Path("data/raw_data")
 PROCESSED_PATH = Path("data/processed_data")
 
+# Forward-return horizons written into the processed panel: the ticker targets
+# (future_return_Nd, beats_median_Nd) and the SPY benchmark (spy_future_return_Nd).
+# Every horizon walkforward.HORIZON might be set to has to be listed here.
+HORIZONS = [1, 5, 20]
+
 NUMERIC_COLUMNS = [
     "open",
     "high",
@@ -235,7 +240,7 @@ def extract_market_features(raw):
     # in. SPY is what someone could actually have bought.
     #
     # These look forward and must stay out of MARKET_FEATURES.
-    for horizon in [1, 5]:
+    for horizon in HORIZONS:
         market[f"spy_future_return_{horizon}d"] = spy.shift(-horizon) / spy - 1
 
     market = market.reset_index()
@@ -324,11 +329,16 @@ def extract_technicals(df) :
     # Body size relative to candle high and low
     df["body_pct"] = (df["close"] - df["open"]) / candle_range
 
-    # y predictors (forward returns)
-    df["future_return_1d"] = (df.groupby("ticker")["close"].shift(-1) / df["close"] - 1)
-
-    # Both horizons are kept so TARGET can be switched without reprocessing.
-    df["future_return_5d"] = (df.groupby("ticker")["close"].shift(-5) / df["close"] - 1)
+    # y predictors (forward returns). Every horizon is kept so TARGET can be
+    # switched without reprocessing.
+    #
+    # The cost: dropna() below removes any row missing a target, so the longest
+    # horizon decides how much of the panel tail is lost -- 20 trading days per
+    # ticker rather than 5.
+    for horizon in HORIZONS:
+        df[f"future_return_{horizon}d"] = (
+            df.groupby("ticker")["close"].shift(-horizon) / df["close"] - 1
+        )
 
     return df
 
@@ -348,7 +358,7 @@ def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
     print("Null technical rows removed")
 
     # Beating the MEDIAN: did this ticker land in the better half of the day's returns.
-    for horizon in [1, 5]:
+    for horizon in HORIZONS:
         df[f"beats_median_{horizon}d"] = (
             df.groupby("date")[f"future_return_{horizon}d"].rank(pct=True) > 0.5
         ).astype(int)

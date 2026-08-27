@@ -41,7 +41,7 @@ RF_BEST = {
 }
 
 XGB_BEST = {
-    "n_estimators": 100,
+    "n_estimators": 200,
     "max_depth": 5,
     "learning_rate": 0.1,
 }
@@ -289,8 +289,8 @@ def tune_xgboost(train_data, test_data):
 
 if __name__ == "__main__":
     RUN_BASELINE = False
-    RUN_TUNING = True
-    RUN_WALKFORWARD = False
+    RUN_TUNING = False
+    RUN_WALKFORWARD = True
 
     if RUN_BASELINE:
         print("RandomForest R2 Score:", random_forest()[0])

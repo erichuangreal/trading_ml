@@ -19,15 +19,14 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 
-from walkforward import IS_CLASSIFIER
+from walkforward import IS_CLASSIFIER, HORIZON, TARGET
 
 MODELS_PATH = Path("models")
 
-TARGET = "future_return_5d"
-
-# Trading days each position is held. Must match walkforward.HORIZON -- the
-# scored days are spaced this far apart, so each row is one full holding period.
-HORIZON = 5
+# HORIZON and TARGET come from walkforward rather than being restated here.
+# They have to agree: the scored days are spaced HORIZON apart, so each row is
+# one full holding period and PERIODS_PER_YEAR below annualises off it. A local
+# copy silently mis-annualises every return in this file when the horizon moves.
 
 # Scored at several basket sizes because they answer different questions. 3 is
 # what is realistic to actually hold, but with only 3 names a day the spread's
@@ -64,8 +63,43 @@ BENCHMARK_COLUMN = f"spy_future_return_{HORIZON}d"
 # 1/15th the size, so the total stays 15 bps.
 ROUND_TRIP_COST = 0.0015
 
+# --- position sizing ---------------------------------------------------------
+# Equal weight on the top N gives the highest-volatility name in the basket the
+# biggest say in the period's return, which is backwards: the ranking says which
+# names to hold, it says nothing about how much risk each deserves. Weighting by
+# 1 / volatility_20d equalises the risk contribution instead.
+#
+# This is a sizing decision, not a ranking one -- finding 6 (dividing a
+# classifier's pred by volatility collapses the ranking to "lowest volatility
+# first") is about the score, and the score is untouched.
+VOL_WEIGHTED = True
+
+# Annualised volatility the long-only basket is sized to, or None to hold it
+# unlevered. The top baskets ran 21-36% against SPY's 17.3% over 2023-2026, and
+# that gap alone accounts for most of the Sharpe deficit even where the returns
+# match. Targeting spends no signal.
+VOL_TARGET = 0.173
+
+# Cap at 1.0 = never borrow, so this can only de-risk. Raise it to let quiet
+# periods lever up, which is where most of the Sharpe gain in vol targeting
+# usually comes from -- but that is a separate decision with a margin cost.
+MAX_EXPOSURE = 1.0
+MIN_EXPOSURE = 0.2
+
+# Hedging the market out was tested and removed. Shorting SPY against the long
+# book cut volatility from 25.6% to 11.9% but took the return from +33.8% to
+# +5.4% a year, and the Sharpe fell from +1.15 to +0.44 -- worse on margin too,
+# so it was not the funding that killed it. Most of the book's return comes from
+# the market exposure, not from the selection; the ranking edge is real but too
+# thin to carry a book on its own. Do not re-add without new evidence.
+
 # Periods per year, and so the annualisation factor. One position per horizon.
 PERIODS_PER_YEAR = TRADING_DAYS / HORIZON
+
+# Trailing window used to estimate the basket's own volatility, in periods --
+# about a year either way, so it tracks regime without chasing single periods.
+VOL_LOOKBACK = max(6, int(round(PERIODS_PER_YEAR)))
+VOL_MIN_PERIODS = max(4, VOL_LOOKBACK // 4)
 
 
 # Long-only puts all capital on one side. A long/short book splits it, so its
@@ -157,6 +191,65 @@ def median_test(pooled):
     return daily
 
 
+def inverse_vol_weights(picks):
+    """Basket weights proportional to 1 / volatility_20d, summing to 1.
+
+    Falls back to equal weight for any name with a missing or zero volatility,
+    and for the whole basket if none of them have one.
+    """
+    equal = pd.Series(1.0 / len(picks), index=picks.index)
+
+    if not VOL_WEIGHTED:
+        return equal
+
+    inverse = 1.0 / picks["volatility_20d"].replace(0, np.nan)
+    inverse = inverse.replace([np.inf, -np.inf], np.nan)
+
+    if inverse.isna().all():
+        return equal
+
+    inverse = inverse.fillna(inverse.mean())
+    total = inverse.sum()
+
+    return equal if total == 0 else inverse / total
+
+
+def add_vol_target(daily):
+    """Scale gross exposure so the basket's forward risk lands near VOL_TARGET.
+
+    The scalar is estimated from the trailing realised volatility of the
+    basket's own unlevered period returns, shifted one period, so nothing from
+    the period being sized enters its own estimate. Estimating instead from the
+    picks' cross-sectional volatility_20d would ignore how much of that
+    diversifies away across the basket and de-risk far too hard.
+
+    Until the lookback fills there is nothing to size on, so the basket is held
+    unlevered rather than sized on a guess.
+    """
+    daily = daily.copy()
+
+    if VOL_TARGET is None:
+        daily["exposure"] = 1.0
+    else:
+        realised = (
+            daily["top_return"]
+            .shift(1)
+            .rolling(VOL_LOOKBACK, min_periods=VOL_MIN_PERIODS)
+            .std()
+            * np.sqrt(PERIODS_PER_YEAR)
+        )
+
+        exposure = (VOL_TARGET / realised).clip(MIN_EXPOSURE, MAX_EXPOSURE)
+        daily["exposure"] = exposure.fillna(1.0)
+
+    daily["scaled_return"] = daily["exposure"] * daily["top_return"]
+
+    # Cost is proportional to dollars traded, so a half-sized book pays half.
+    daily["scaled_cost"] = ROUND_TRIP_COST * daily["exposure"]
+
+    return daily
+
+
 def top_n_test(pooled, n=TOP_N):
     """Where the model's n highest-ranked tickers actually landed each day.
 
@@ -205,6 +298,11 @@ def top_n_test(pooled, n=TOP_N):
         bottom = day.nsmallest(n, "score")
         actual_top = set(day.nlargest(n, TARGET)["ticker"])
 
+        # Sizing, not selection: the picks are already chosen, this only decides
+        # how much of the book each one gets.
+        top_weights = inverse_vol_weights(top)
+        bottom_weights = inverse_vol_weights(bottom)
+
         rows.append({
             "date": date,
             "tickers": len(day),
@@ -212,10 +310,10 @@ def top_n_test(pooled, n=TOP_N):
             "mean_actual_rank": top["actual_rank"].mean(),
             "beat_median": int(top["actual_beats"].sum()),
             "in_actual_top": len(set(top["ticker"]) & actual_top),
-            "top_return": top[TARGET].mean(),
-            "bottom_return": bottom[TARGET].mean(),
+            "top_return": float((top[TARGET] * top_weights).sum()),
+            "bottom_return": float((bottom[TARGET] * bottom_weights).sum()),
             "universe_return": day[TARGET].mean(),
-            "top_volatility": top["volatility_20d"].mean(),
+            "top_volatility": float((top["volatility_20d"] * top_weights).sum()),
             "universe_volatility": day["volatility_20d"].mean(),
             # Identical across tickers on a date, so any row carries it.
             "benchmark_return": (
@@ -224,10 +322,17 @@ def top_n_test(pooled, n=TOP_N):
             ),
         })
 
-    daily = pd.DataFrame(rows).set_index("date")
-    daily["excess_return"] = daily["top_return"] - daily["universe_return"]
+    daily = add_vol_target(pd.DataFrame(rows).set_index("date"))
+
+    # Measured against what is actually held, so the excess columns and the
+    # monthly table follow the sizing. With VOL_WEIGHTED off and VOL_TARGET
+    # None, scaled_return is top_return and these are the old numbers.
+    daily["excess_return"] = daily["scaled_return"] - daily["universe_return"]
+    daily["excess_vs_benchmark"] = daily["scaled_return"] - daily["benchmark_return"]
+
+    # The spread is a signal diagnostic, not a book -- left unlevered so it
+    # keeps measuring the ranking rather than the sizing.
     daily["spread"] = daily["top_return"] - daily["bottom_return"]
-    daily["excess_vs_benchmark"] = daily["top_return"] - daily["benchmark_return"]
 
     return daily
 
@@ -252,10 +357,25 @@ def top_n_summary(daily, days, n, tickers_per_day):
 
     # Long-only earns the basket's own return, and beating SPY is the bar it has
     # to clear. Long/short earns the spread, which nets the market out already.
-    returns = daily["top_return"] if LONG_ONLY else daily["spread"]
+    #
+    # Cost follows exposure rather than being one number, so a de-risked period
+    # is not charged for a full-sized round trip. The per-period figures below
+    # need a scalar, so they use its average.
+    if LONG_ONLY:
+        returns = daily["scaled_return"]
+        cost = daily["scaled_cost"]
+    else:
+        returns = daily["spread"]
+        cost = pd.Series(ROUND_TRIP_COST, index=daily.index)
+
+    mean_cost = float(cost.mean())
 
     gross_sharpe = sharpe(returns)
-    net_sharpe = sharpe(returns, ROUND_TRIP_COST)
+    net_sharpe = sharpe(returns, cost)
+
+    # What the book actually ran at, against what it was aiming for.
+    realised_vol = returns.std() * np.sqrt(PERIODS_PER_YEAR)
+    mean_exposure = float(daily["exposure"].mean())
 
     header = [
         f"TOP {n} -- ranked by {'pred' if IS_CLASSIFIER else 'pred / volatility_20d'}",
@@ -267,6 +387,17 @@ def top_n_summary(daily, days, n, tickers_per_day):
         f"  Volatility of picks:    {vol_ratio:.2f}x universe   (1.00 = same risk)",
         "",
     ]
+
+    if LONG_ONLY:
+        header.insert(1, (
+            f"  sized by {'1 / volatility_20d' if VOL_WEIGHTED else 'equal weight'}, "
+            + (
+                "held unlevered"
+                if VOL_TARGET is None
+                else f"scaled to a {VOL_TARGET:.1%} vol target "
+                     f"({mean_exposure:.2f}x average exposure)"
+            )
+        ))
 
     if not LONG_ONLY:
         return header + [
@@ -290,15 +421,19 @@ def top_n_summary(daily, days, n, tickers_per_day):
     basket = returns.mean()
 
     lines = header + [
-        f"  LONG ONLY TOP {n}  (100% long, rebalanced every {HORIZON}d)",
+        f"  LONG ONLY TOP {n}  ({mean_exposure:.0%} long on average, "
+        f"rebalanced every {HORIZON}d)",
         f"    Return per {HORIZON}d:   {basket * 10000:+.2f} bps",
-        f"    Volatility:       {returns.std() * 10000:.2f} bps",
-        f"    Cost assumption:  {ROUND_TRIP_COST * 10000:.1f} bps per {HORIZON}d round trip",
+        f"    Volatility:       {returns.std() * 10000:.2f} bps"
+        f"   |   annualised: {realised_vol:.2%}"
+        + ("" if VOL_TARGET is None else f"   (target {VOL_TARGET:.2%})"),
+        f"    Cost assumption:  {mean_cost * 10000:.1f} bps per {HORIZON}d round trip"
+        f"   ({ROUND_TRIP_COST * 10000:.1f} bps at full size)",
         "",
         f"    GROSS   {HORIZON}d return: {period_return(basket):+.4%}"
         f"   |   yearly: {annualised_return(basket):+.2%}",
-        f"    NET     {HORIZON}d return: {period_return(basket, ROUND_TRIP_COST):+.4%}"
-        f"   |   yearly: {annualised_return(basket, ROUND_TRIP_COST):+.2%}",
+        f"    NET     {HORIZON}d return: {period_return(basket, mean_cost):+.4%}"
+        f"   |   yearly: {annualised_return(basket, mean_cost):+.2%}",
     ]
 
     if not np.isnan(benchmark):
@@ -307,8 +442,8 @@ def top_n_summary(daily, days, n, tickers_per_day):
             f"    vs SPY (buy and hold)  -- is this worth running at all",
             f"      SPY return:     {period_return(benchmark):+.4%}"
             f"   |   yearly: {annualised_return(benchmark):+.2%}",
-            f"      NET excess:     {period_return(excess_benchmark, ROUND_TRIP_COST):+.4%}"
-            f"   |   yearly: {annualised_return(excess_benchmark, ROUND_TRIP_COST):+.2%}"
+            f"      NET excess:     {period_return(excess_benchmark, mean_cost):+.4%}"
+            f"   |   yearly: {annualised_return(excess_benchmark, mean_cost):+.2%}"
             f"   <- beats SPY if positive",
         ]
 
@@ -317,8 +452,8 @@ def top_n_summary(daily, days, n, tickers_per_day):
         f"    vs UNIVERSE (equal-weight 90)  -- does the ranking add anything",
         f"      universe return: {period_return(universe):+.4%}"
         f"   |   yearly: {annualised_return(universe):+.2%}",
-        f"      NET excess:      {period_return(excess, ROUND_TRIP_COST):+.4%}"
-        f"   |   yearly: {annualised_return(excess, ROUND_TRIP_COST):+.2%}",
+        f"      NET excess:      {period_return(excess, mean_cost):+.4%}"
+        f"   |   yearly: {annualised_return(excess, mean_cost):+.2%}",
     ]
 
     return lines + [

@@ -17,29 +17,42 @@ MODELS_PATH = Path("models")
 TEST_START = pd.Timestamp("2023-01-01")
 TEST_END = pd.Timestamp("2026-08-25")
 
-# Trading days between refits. 1 = retrain every day, 5 = once a week.
-RETRAIN_EVERY = 5
+# Trading days between refits, and so also the rebalance interval -- the scored
+# days are HORIZON apart and each refit block covers one of them. Held at HORIZON
+# so a position is opened and closed exactly once per period; refitting more
+# often than the book turns over buys nothing the walk-forward can measure.
+RETRAIN_EVERY = 20
 
 # None uses the entire training dataset
 # Set it to 365 to use data for the recent year only
 TRAIN_WINDOW = None
 
-# 5-day. Costs are paid once per hold instead of five times, which is what turns
-# a positive gross return into a positive net one. The price is ~82
-# non-overlapping scored periods against ~410 at 1-day, so the error bar widens
-# from +-0.38pp to +-0.63pp -- read the sign, not the magnitude. Moving
-# TEST_START back to 2023 would roughly double the sample.
-TARGET = "future_return_5d"
+
+# 20-day. The gap to buy-and-hold is a cost and volatility gap, not a signal
+# gap: at 5-day the book turns over ~50 times a year at 15bps, at 20-day ~12.
+# The market, EDGAR and earnings features were worth +1.09pp at 5-day and
+# nothing at 1-day, so they should keep gaining as the horizon lengthens --
+# this tests that extrapolation and the cost cut at once.
+#
+# The price is sample size: ~45 non-overlapping periods over 2023-2026 against
+# 182 at 5-day, so the error bar roughly doubles. Read the sign and the t-stat,
+# not the magnitude.
+#
+# HORIZON drives everything downstream -- TARGET, TRAIN_TARGET, the embargo
+# width, the scored-day spacing, and rank_testing's annualisation. Every value
+# used here must appear in process_data.HORIZONS.
+HORIZON = 20
+
+TARGET = f"future_return_{HORIZON}d"
 
 # Classifier. Tested head to head against the regressor on the same 24 features
 # and window: the edge was near identical (+0.56pp vs +0.51pp) but the monthly
 # spread was 43% tighter (SD 0.0133 vs 0.0190), so t went 1.83 vs 1.32. Training
 # on the ordering gives a steadier ranking, not a bigger one.
 #
-# This one constant also flips xgboost_pipeline's estimator, PRED_THRESHOLD, and
+# beats_median also flips xgboost_pipeline's estimator, PRED_THRESHOLD, and
 # whether rank_testing divides by volatility.
-TRAIN_TARGET = "beats_median_5d"
-HORIZON = 5
+TRAIN_TARGET = f"beats_median_{HORIZON}d"
 
 # A regressor predicts a return, so its sign is the predicted direction. A
 # classifier predicts P(beats median), which lives in [0, 1] and crosses at 0.5

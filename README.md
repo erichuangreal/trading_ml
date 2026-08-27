@@ -102,8 +102,7 @@ MODEL CONCLUSION: Ridge and RandomForest models will not be tested from now on a
 - Added 2026 data to testing
 - No trading within N days of earnings reports, on both sides
 - Changed the predictions to future_5d returns instead of 1d to decrease variability and predict a general trend
-- Added volume metrics and VIX/SPY as an average benchmark for the model to compare to
-- 
+- Added volume metrics and VIX/SPY as an average benchmark for the model to compare with
 - Goal: *IC ≈ 0.03, reproduced across two test years, at a horizon where costs leave net Sharpe above 1.0.*
 
 Best performing model:
@@ -148,3 +147,54 @@ Averaged across 5 seeds:
 
 Results: the variance between different seeds is negligble, so I dropped seed averaging and stuck to a constant SEED = 42
 
+### Version 4 - Currently the best-performing model
+- Previous models are consistently underperforming the NASDAQ ETF and SPY returns and this version managed to edge it out by ~7% at the cost of higher risk
+- Hold for 20 days instead of 5 (horizon and future returns are both 20d)
+- Split money by volatility (BIG):
+1. Prev I was splitting $100 dollars into 3 equal portions to long the top 3 tickers.
+2. Changed it so that calm stocks get a larger portion and wild stocks get less
+3. If the whole market is going through a period of instability, instead of investing $100, investments are measured on a gradient and can go down to 20%.
+4. Target 17.3% bumpiness. Never borrows (max 100%), never fully exits (min 20%).
+5. Top N stocks: investigates top 1, 3, and 15 tickers (Top 3 chosen. Top 1 earns more but the gap tests at t = 0.51 which indistinguishable from luck)
+
+## Compare to version 1, what got better
+
+| Metric | 5-Day (Old Best) | 20-Day (This Run) |
+|---|---:|---:|
+| Top 3 net yearly | +30.0% | +33.8% |
+| Top 3 Sharpe | 0.73 | **1.15** |
+| Sorting edge | +1.23pp | +1.85pp |
+
+## Results
+- Compared against the SPY and NASDAQ (universe all 90).
+- Top 3 comes out on top
+
+## Strategy Performance Comparison
+
+| Rank | Strategy | Annual Return | Sharpe | Long on Average | Sorting Edge | t-stat |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | **Top 3** | **+33.8%** | 1.15 | 78% | +1.85 pp | 2.19 |
+| 2 | Top 1 | +43.8% | **1.31** | 54% | +1.85 pp | 2.19 |
+| 3 | NASDAQ / Universe | +27.7% | 1.55 | - | - | - |
+| 4 | SPY | +24.3% | **1.77** | - | - | - |
+| 5 | Top 15 | +24.1% | 1.19 | 93% | +1.85 pp | 2.19 |
+
+Top 1 has the greatest annual return, but a low sharpe (1.31) and average win-rate (54%) means that this pick carries a lot of risk.
+
+Therefore, I choose top 3 as the highest yielding output with managed risk. For a low-risk alternative, choose top 15.
+
+## Top 3 Result
+![Top 3 XGBoost Strategy Results](best_working_model.png)
+
+### Conclusion
+
+- The **Top 3 strategy shows a meaningful ranking edge** over random selection.
+- It beats both **SPY and the equal-weight universe after costs**.
+- The strongest signal is the **+259.04 bps/period Top-minus-Bottom spread**, suggesting the ranking model is separating stronger and weaker stocks.
+- The main weakness is risk: **25.57% annualised volatility** is still well above the 17.3% target.
+- Overall, Top 3 is the strongest practical strategy candidate so far.
+
+### Abstract
+Final model: Top 3, long only, 20-day hold, 34 features, inverse-volatility weighted with the 17.3% vol target. Sorting edge +1.85pp at t = 2.19, +33.8%/yr net against SPY's +24.3% and the universe's +27.7%.
+
+View log for details: [View full results](models/v4xgboost_walkforward_2026-08-26_22-53-59/rank_testing.log)
