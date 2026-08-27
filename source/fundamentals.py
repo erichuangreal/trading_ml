@@ -1,17 +1,4 @@
-"""Fundamental features from yfinance quarterly statements.
-
-Two things make this harder than the technicals:
-
-1. Coverage. quarterly_income_stmt returns roughly 4-6 quarters, so most of a
-   2020-2025 panel has no fundamental data at all. Those rows stay NaN. XGBoost
-   handles NaN natively; RandomForest does not, so this is XGBoost-only.
-
-2. Lookahead. The column dates on these statements are fiscal period ENDS, not
-   filing dates. A quarter ending 2025-03-31 is not public until early May, so
-   joining on the period end would hand the model numbers 45+ days before anyone
-   could have seen them. REPORTING_LAG_DAYS shifts each figure forward to a date
-   it was plausibly known, and merge_asof then gives every daily row the most
-   recent figure that was public by then.
+"""Fundamental features from yfinance.
 """
 
 import pandas as pd
@@ -22,22 +9,30 @@ import time
 
 RAW_PATH = Path("data/raw_data")
 
-# Calendar days between fiscal period end and the figure being public. US large
-# caps file 10-Qs within 40 days; 45 is a slightly conservative round number.
-REPORTING_LAG_DAYS = 45
+# Must match what ticker_statements fetches. income_stmt is annual; switching to
+# quarterly means quarterly_income_stmt there and a shift of 4 in the growth
+# calculation -- and yfinance only served 7 quarters, which was not enough for
+# any TTM window.
+STATEMENT_FREQUENCY = "annual"
+
+# Days between period end and the filing being public. 10-Q is due in 40 days,
+# 10-K in 60-90. Both rounded up to stay conservative.
+REPORTING_LAG_DAYS = 45 if STATEMENT_FREQUENCY == "quarterly" else 90
+
+# Periods back for the year-ago comparison: 4 quarters, or 1 year.
+YEAR_AGO_PERIODS = 4 if STATEMENT_FREQUENCY == "quarterly" else 1
+
+# Positions are excluded this many days either side of a report. Sized to the
+# holding period: a position entered today is held 5 days, so a report anywhere
+# in that window lands inside the trade. The move on an earnings day is dominated
+# by the surprise, which none of these features see.
+EARNINGS_EXCLUSION_DAYS = 5
 
 FUNDAMENTAL_FEATURES = [
-    "revenue_growth_yoy",
-    "eps_growth_yoy",
-    "profit_margin",
-    "debt_to_equity",
-    "fcf_margin",
-    "pe_ratio",
-    "ps_ratio",
+    "days_since_earnings",
+    "days_to_earnings",
 ]
 
-# yfinance row labels vary by ticker and change between versions, so each figure
-# is looked up against a list of candidates rather than one exact string.
 ROW_CANDIDATES = {
     "revenue": ["Total Revenue", "Operating Revenue"],
     "net_income": [
@@ -46,15 +41,6 @@ ROW_CANDIDATES = {
         "Net Income From Continuing Operation Net Minority Interest",
     ],
     "eps": ["Diluted EPS", "Basic EPS"],
-    "shares": ["Diluted Average Shares", "Basic Average Shares"],
-    "total_debt": ["Total Debt"],
-    "long_term_debt": ["Long Term Debt"],
-    "current_debt": ["Current Debt", "Current Debt And Capital Lease Obligation"],
-    "equity": ["Stockholders Equity", "Total Equity Gross Minority Interest"],
-    "shares_balance": ["Ordinary Shares Number", "Share Issued"],
-    "free_cash_flow": ["Free Cash Flow"],
-    "operating_cash_flow": ["Operating Cash Flow", "Cash Flow From Continuing Operating Activities"],
-    "capex": ["Capital Expenditure"],
 }
 
 
@@ -70,203 +56,217 @@ def pick_row(statement, key):
     return None
 
 
-def ticker_fundamentals(ticker):
-    """Quarterly figures for one ticker, oldest first, indexed by period end."""
-    handle = yf.Ticker(ticker)
-
+def ticker_statements(ticker_handle, ticker):
+    """Annual revenue, net income and EPS, oldest first."""
     try:
-        income = handle.quarterly_income_stmt
-        balance = handle.quarterly_balance_sheet
-        cashflow = handle.quarterly_cashflow
+        income = ticker_handle.income_stmt
     except Exception as error:
-        print(f"  {ticker}: fetch failed ({error})")
+        print(f"  {ticker}: statements failed ({error})")
         return None
 
     revenue = pick_row(income, "revenue")
     if revenue is None or revenue.empty:
-        print(f"  {ticker}: no revenue row, skipping")
         return None
 
     columns = {
         "revenue": revenue,
         "net_income": pick_row(income, "net_income"),
         "eps": pick_row(income, "eps"),
-        "shares": pick_row(income, "shares"),
-        "total_debt": pick_row(balance, "total_debt"),
-        "equity": pick_row(balance, "equity"),
-        "free_cash_flow": pick_row(cashflow, "free_cash_flow"),
     }
-
-    # Total Debt is often absent; rebuild it from the two components.
-    if columns["total_debt"] is None:
-        long_term = pick_row(balance, "long_term_debt")
-        current = pick_row(balance, "current_debt")
-        if long_term is not None:
-            columns["total_debt"] = long_term.add(
-                current if current is not None else 0, fill_value=0
-            )
-
-    # Same for Free Cash Flow: operating cash flow less capital expenditure.
-    if columns["free_cash_flow"] is None:
-        operating = pick_row(cashflow, "operating_cash_flow")
-        capex = pick_row(cashflow, "capex")
-        if operating is not None and capex is not None:
-            # capex is reported negative, so adding it subtracts the spend.
-            columns["free_cash_flow"] = operating.add(capex, fill_value=0)
-
-    # Share count can come from either statement.
-    if columns["shares"] is None:
-        columns["shares"] = pick_row(balance, "shares_balance")
 
     frame = pd.DataFrame(
         {name: series for name, series in columns.items() if series is not None}
     )
 
+    # The statements do not always share period ends, and building a frame from
+    # their Series unions the indices -- leaving rows with no revenue that would
+    # break the growth shift.
+    frame = frame.dropna(subset=["revenue"])
     if frame.empty:
         return None
 
     frame.index = pd.to_datetime(frame.index)
     frame = frame.sort_index()
-
-    # The three statements do not always report the same period ends, and building
-    # a DataFrame from their Series unions the indices. That leaves phantom rows
-    # with no income-statement figures, which then sit inside the rolling windows
-    # and turn every TTM touching them into NaN.
-    frame = frame.dropna(subset=["revenue"])
-
     frame["ticker"] = ticker
     frame.index.name = "period_end"
 
     return frame.reset_index()
 
 
-def download_fundamentals(tickers, output_path=RAW_PATH / "fundamentals.parquet"):
-    """Fetch every ticker's quarterly statements and cache them.
+def ticker_earnings(ticker_handle, ticker):
+    """Every earnings date yfinance will serve, past and scheduled."""
+    try:
+        dates = ticker_handle.get_earnings_dates(limit=60)
+    except Exception as error:
+        print(f"  {ticker}: earnings dates failed ({error})")
+        return None
 
-    Three API calls per ticker, so this is slow and worth doing once rather than
-    on every processing run.
-    """
-    frames = []
+    if dates is None or dates.empty:
+        return None
+
+    stamps = pd.to_datetime(dates.index)
+    if stamps.tz is not None:
+        stamps = stamps.tz_localize(None)
+
+    return pd.DataFrame({
+        "ticker": ticker,
+        "earnings_date": stamps.normalize(),
+    })
+
+
+def download_fundamentals(tickers,
+                          statements_path=RAW_PATH / "fundamentals.parquet",
+                          earnings_path=RAW_PATH / "earnings_dates.parquet"):
+    """Fetch annual statements and earnings dates, and cache both."""
+    statement_frames = []
+    earnings_frames = []
 
     for n, ticker in enumerate(tickers, 1):
-        frame = ticker_fundamentals(ticker)
-        if frame is not None:
-            frames.append(frame)
+        handle = yf.Ticker(ticker)
+
+        statements = ticker_statements(handle, ticker)
+        if statements is not None:
+            statement_frames.append(statements)
+
+        earnings = ticker_earnings(handle, ticker)
+        if earnings is not None:
+            earnings_frames.append(earnings)
 
         if n % 10 == 0:
             print(f"  {n}/{len(tickers)} tickers")
         time.sleep(0.2)
 
-    if not frames:
-        raise RuntimeError("No fundamentals downloaded for any ticker.")
+    if not statement_frames:
+        raise RuntimeError("No statements downloaded for any ticker.")
 
-    raw = pd.concat(frames, ignore_index=True)
-    raw.to_parquet(output_path, index=False)
+    statements = pd.concat(statement_frames, ignore_index=True)
+    statements.to_parquet(statements_path, index=False)
+    print(f"\nStatements: {len(statements)} ticker-years, "
+          f"{statements['ticker'].nunique()} tickers, "
+          f"{statements['period_end'].min().date()} to {statements['period_end'].max().date()}")
 
-    print(f"\nFundamentals: {len(raw)} ticker-quarters, "
-          f"{raw['ticker'].nunique()} tickers, "
-          f"{raw['period_end'].min().date()} to {raw['period_end'].max().date()}")
+    if earnings_frames:
+        earnings = pd.concat(earnings_frames, ignore_index=True)
+        earnings.to_parquet(earnings_path, index=False)
+        print(f"Earnings dates: {len(earnings)} reports, "
+              f"{earnings['ticker'].nunique()} tickers, "
+              f"{earnings['earnings_date'].min().date()} to {earnings['earnings_date'].max().date()}")
 
-    return raw
+    return statements
 
 
 def build_fundamental_features(raw):
-    """Turn raw quarterly figures into ratios, dated from when they were public."""
+    """Annual figures turned into ratios, dated from when they were public."""
     raw = raw.sort_values(["ticker", "period_end"]).copy()
     grouped = raw.groupby("ticker")
 
-    # Flow items are summed over four quarters; balance items are point-in-time.
-    for column in ["revenue", "net_income", "eps", "free_cash_flow"]:
-        if column in raw.columns:
-            raw[f"ttm_{column}"] = grouped[column].transform(
-                lambda s: s.rolling(4, min_periods=4).sum()
-            )
+    # Annual, so the prior year is one row back rather than four.
+    raw["revenue_growth_yoy"] = grouped["revenue"].transform(
+        lambda s: s / s.shift(1).replace(0, np.nan) - 1
+    )
 
-    # Same quarter a year earlier is four rows back.
-    if "revenue" in raw.columns:
-        raw["revenue_growth_yoy"] = grouped["revenue"].transform(
-            lambda s: s / s.shift(4).replace(0, np.nan) - 1
-        )
+    if "net_income" in raw.columns:
+        raw["profit_margin"] = raw["net_income"] / raw["revenue"].replace(0, np.nan)
 
-    if "eps" in raw.columns:
-        raw["eps_growth_yoy"] = grouped["eps"].transform(
-            lambda s: s / s.shift(4).replace(0, np.nan) - 1
-        )
-
-    if "ttm_net_income" in raw.columns and "ttm_revenue" in raw.columns:
-        raw["profit_margin"] = raw["ttm_net_income"] / raw["ttm_revenue"].replace(0, np.nan)
-
-    if "total_debt" in raw.columns and "equity" in raw.columns:
-        raw["debt_to_equity"] = raw["total_debt"] / raw["equity"].replace(0, np.nan)
-
-    if "ttm_free_cash_flow" in raw.columns and "ttm_revenue" in raw.columns:
-        raw["fcf_margin"] = raw["ttm_free_cash_flow"] / raw["ttm_revenue"].replace(0, np.nan)
-
-    # The date a daily row is first allowed to see these numbers.
     raw["available_from"] = raw["period_end"] + pd.Timedelta(days=REPORTING_LAG_DAYS)
 
-    keep = [
-        "ticker",
-        "available_from",
-        "revenue_growth_yoy",
-        "eps_growth_yoy",
-        "profit_margin",
-        "debt_to_equity",
-        "fcf_margin",
-        "ttm_eps",
-        "ttm_revenue",
-        "shares",
-    ]
-
+    keep = ["ticker", "available_from", "revenue_growth_yoy", "profit_margin", "eps"]
     keep = [column for column in keep if column in raw.columns]
 
     return raw[keep].dropna(subset=["available_from"]).sort_values("available_from")
 
 
+def align_keys(left, right, left_on, right_on):
+    """merge_asof rejects join keys that differ in dtype or datetime resolution."""
+    left = left.copy()
+    right = right.copy()
+
+    left["ticker"] = left["ticker"].astype("string")
+    right["ticker"] = right["ticker"].astype("string")
+
+    left[left_on] = left[left_on].astype("datetime64[ns]")
+    right[right_on] = right[right_on].astype("datetime64[ns]")
+
+    return left.sort_values(left_on).reset_index(drop=True), \
+        right.sort_values(right_on).reset_index(drop=True)
+
+
 def merge_fundamentals(df, features):
-    """Attach each daily row the most recent figures that were public by then.
-
-    merge_asof with direction="backward" is the point-in-time join: a row dated
-    2025-06-10 picks up the last filing available on or before that date, and
-    carries it until the next one lands.
-    """
-    df = df.sort_values("date").reset_index(drop=True)
-    features = features.sort_values("available_from").reset_index(drop=True)
-
-    # merge_asof demands both join keys match exactly. Two mismatches to fix:
-    # ticker is StringDtype on both sides but with different NA sentinels
-    # (clean_data uses .astype("string"), these arrive as plain Python str), and
-    # the dates land at different resolutions -- ms off the parquet, us from the
-    # yfinance timestamps.
-    df["ticker"] = df["ticker"].astype("string")
-    features["ticker"] = features["ticker"].astype("string")
-
-    df["date"] = df["date"].astype("datetime64[ns]")
-    features["available_from"] = features["available_from"].astype("datetime64[ns]")
+    """Attach each daily row the most recent figures that were public by then."""
+    df, features = align_keys(df, features, "date", "available_from")
 
     merged = pd.merge_asof(
-        df,
-        features,
-        left_on="date",
-        right_on="available_from",
-        by="ticker",
-        direction="backward",
+        df, features,
+        left_on="date", right_on="available_from",
+        by="ticker", direction="backward",
     )
 
-    # P/E and P/S move daily because price does, so they are built after the join.
-    if "ttm_eps" in merged.columns:
-        merged["pe_ratio"] = merged["close"] / merged["ttm_eps"].replace(0, np.nan)
+    # Price moves daily while the earnings figure holds, so this is built after
+    # the join rather than in build_fundamental_features.
+    if "eps" in merged.columns:
+        merged["pe_ratio"] = merged["close"] / merged["eps"].replace(0, np.nan)
 
-    if "ttm_revenue" in merged.columns and "shares" in merged.columns:
-        market_cap = merged["close"] * merged["shares"]
-        merged["ps_ratio"] = market_cap / merged["ttm_revenue"].replace(0, np.nan)
+    return merged.drop(columns=["available_from", "eps"], errors="ignore")
 
-    coverage = merged[FUNDAMENTAL_FEATURES].notna().mean()
-    print("\nFundamental coverage (share of rows with a value):")
-    print(coverage.to_string(float_format=lambda v: f"{v:.3f}"))
 
-    return merged.drop(columns=["available_from", "ttm_eps", "ttm_revenue", "shares"],
-                       errors="ignore")
+def merge_earnings(df, earnings):
+    """Days since the last report and days until the next, per row."""
+    df, earnings = align_keys(df, earnings, "date", "earnings_date")
+
+    previous = pd.merge_asof(
+        df, earnings.rename(columns={"earnings_date": "prev_earnings"}),
+        left_on="date", right_on="prev_earnings",
+        by="ticker", direction="backward",
+    )
+
+    upcoming = pd.merge_asof(
+        df, earnings.rename(columns={"earnings_date": "next_earnings"}),
+        left_on="date", right_on="next_earnings",
+        by="ticker", direction="forward",
+    )
+
+    # merge_asof preserves the left frame's row order and length, so these line
+    # up positionally with df.
+    df["days_since_earnings"] = (
+        df["date"] - previous["prev_earnings"].to_numpy()
+    ).dt.days
+    df["days_to_earnings"] = (
+        upcoming["next_earnings"].to_numpy() - df["date"]
+    ).dt.days
+
+    df["near_earnings"] = (
+        (df["days_to_earnings"] <= EARNINGS_EXCLUSION_DAYS)
+        | (df["days_since_earnings"] <= EARNINGS_EXCLUSION_DAYS)
+    ).fillna(False)
+
+    return df
+
+
+def attach_fundamentals(df, earnings_path=RAW_PATH / "earnings_dates.parquet"):
+    """Merge the earnings calendar and report coverage.
+
+    Statement figures are no longer merged here -- edgar.attach_edgar supplies
+    pe_ratio, profit_margin and revenue_growth_yoy with real filing dates and
+    ~15 years of history. Merging both would collide on those column names.
+    build_fundamental_features and merge_fundamentals are kept as the yfinance
+    fallback if EDGAR is ever unavailable.
+    """
+    if earnings_path.exists():
+        df = merge_earnings(df, pd.read_parquet(earnings_path))
+    else:
+        print(f"No {earnings_path} -- run fundamentals.py to fetch them")
+        return df
+
+    present = [column for column in FUNDAMENTAL_FEATURES if column in df.columns]
+    if present:
+        print("\nEarnings coverage (share of rows with a value):")
+        print(df[present].notna().mean().to_string(float_format=lambda v: f"{v:.3f}"))
+
+    if "near_earnings" in df.columns:
+        print(f"Rows inside the {EARNINGS_EXCLUSION_DAYS}-day earnings window: "
+              f"{df['near_earnings'].mean():.3f}")
+
+    return df
 
 
 if __name__ == "__main__":

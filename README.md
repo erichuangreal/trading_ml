@@ -98,7 +98,12 @@ Two tests:
 MODEL CONCLUSION: Ridge and RandomForest models will not be tested from now on as research proves that **XGBoost** is superior.
 
 ### Version 3
-- Implement fundamental metrics (earnings, dividends, P/E, etc.) in an attempt to increase model prediction accuracy
+- Implement fundamental metrics (earnings, dividends, P/E, etc.) in an attempt to increase model prediction accuracy through fundamental analyss
+- Added 2026 data to testing
+- No trading within N days of earnings reports, on both sides
+- Changed the predictions to future_5d returns instead of 1d to decrease variability and predict a general trend
+- Added volume metrics and VIX/SPY as an average benchmark for the model to compare to
+- 
 - Goal: *IC ≈ 0.03, reproduced across two test years, at a horizon where costs leave net Sharpe above 1.0.*
 
 Best performing model:

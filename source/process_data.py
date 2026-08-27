@@ -2,7 +2,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from fundamentals import build_fundamental_features, merge_fundamentals
+from fundamentals import attach_fundamentals
+from edgar_fundamentals import attach_edgar
 
 RAW_PATH = Path("data/raw_data")
 PROCESSED_PATH = Path("data/processed_data")
@@ -209,6 +210,41 @@ def add_prior_period_extremes(df, freq, label):
     return df.drop(columns=["_period", f"{label}_high", f"{label}_low"])
 
 
+def extract_market_features(raw):
+    """Index-level context: one row per date, identical across tickers.
+
+    These cannot separate one stock from another on a given day, so they add
+    nothing to a purely cross-sectional split. What they do is let the model
+    condition on the regime -- the same RSI reading means something different in
+    a calm tape than in a panic.
+    """
+    spy = pd.to_numeric(raw["SPY"]["Close"], errors="coerce")
+    vix = pd.to_numeric(raw["^VIX"]["Close"], errors="coerce")
+
+    market = pd.DataFrame({
+        "spy_return_1d": spy.pct_change(),
+        "spy_return_5d": spy.pct_change(periods=5),
+        "spy_vs_ema50": spy / spy.ewm(span=50, adjust=False).mean() - 1,
+        "vix_level": vix,
+        "vix_vs_60d": vix / vix.rolling(window=60).mean() - 1,
+    })
+
+    # Forward SPY returns -- a benchmark, never a feature. The equal-weight
+    # universe average is a hindsight portfolio: those 90 tickers are the 2026
+    # index members held back to 2023, so it contains only companies that stayed
+    # in. SPY is what someone could actually have bought.
+    #
+    # These look forward and must stay out of MARKET_FEATURES.
+    for horizon in [1, 5]:
+        market[f"spy_future_return_{horizon}d"] = spy.shift(-horizon) / spy - 1
+
+    market = market.reset_index()
+    market = market.rename(columns={market.columns[0]: "date"})
+    market["date"] = pd.to_datetime(market["date"]).astype("datetime64[ns]")
+
+    return market
+
+
 def extract_technicals(df) :
     df = df.sort_values(["ticker", "date"]).copy()
 
@@ -242,6 +278,15 @@ def extract_technicals(df) :
     avg_loss = loss.groupby(df["ticker"]).transform(lambda x: x.rolling(window=14).mean())
     rs = avg_gain / avg_loss
     df["rsi"] = 100 - (100 / (1 + rs))
+
+    # Volume, relative to the ticker's own recent norm so it is comparable
+    # across names. Raw share counts differ by orders of magnitude.
+    df["volume_vs_20d"] = df["volume"] / df.groupby("ticker")["volume"].transform(
+        lambda x: x.rolling(window=20).mean()
+    ).replace(0, np.nan)
+    df["volume_vs_60d"] = df["volume"] / df.groupby("ticker")["volume"].transform(
+        lambda x: x.rolling(window=60).mean()
+    ).replace(0, np.nan)
 
     # Reversals
     sma_20 = df.groupby("ticker")["close"].transform(lambda x: x.rolling(window=20).mean())
@@ -282,6 +327,9 @@ def extract_technicals(df) :
     # y predictors (forward returns)
     df["future_return_1d"] = (df.groupby("ticker")["close"].shift(-1) / df["close"] - 1)
 
+    # Both horizons are kept so TARGET can be switched without reprocessing.
+    df["future_return_5d"] = (df.groupby("ticker")["close"].shift(-5) / df["close"] - 1)
+
     return df
 
 def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
@@ -299,14 +347,27 @@ def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
     df = df.dropna().reset_index(drop=True)
     print("Null technical rows removed")
 
-    # Merged after dropna so sparse fundamentals cannot delete technical rows.
-    fundamentals_path = RAW_PATH / "fundamentals.parquet"
-    if fundamentals_path.exists():
-        fundamentals = build_fundamental_features(pd.read_parquet(fundamentals_path))
-        df = merge_fundamentals(df, fundamentals)
-        print("Fundamentals merged")
+    # Beating the MEDIAN: did this ticker land in the better half of the day's returns.
+    for horizon in [1, 5]:
+        df[f"beats_median_{horizon}d"] = (
+            df.groupby("date")[f"future_return_{horizon}d"].rank(pct=True) > 0.5
+        ).astype(int)
+
+    # Merged after dropna so sparse extras cannot delete technical rows.
+    market_path = RAW_PATH / "market.parquet"
+    if market_path.exists():
+        market = extract_market_features(pd.read_parquet(market_path))
+        df["date"] = df["date"].astype("datetime64[ns]")
+        df = df.merge(market, on="date", how="left")
+        print(f"Market features merged "
+              f"({df['vix_level'].notna().mean():.3f} coverage)")
     else:
-        print(f"No {fundamentals_path} -- run fundamentals.py to fetch them")
+        print(f"No {market_path} -- run extract_data.py to fetch it")
+
+    # Earnings dates come from yfinance; the statement figures come from EDGAR,
+    # which carries real filing dates and ~15 years instead of 4.
+    df = attach_fundamentals(df)
+    df = attach_edgar(df)
     print("Final data shape:", df.shape)
     print("Final data columns:", df.columns.tolist())
     # Save processed data

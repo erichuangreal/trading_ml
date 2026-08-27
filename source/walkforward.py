@@ -11,8 +11,11 @@ import time
 PROCESSED_PATH = Path("data/processed_data")
 MODELS_PATH = Path("models")
 
-TEST_START = pd.Timestamp("2025-01-01")
-TEST_END = pd.Timestamp("2026-01-01")
+# Walk-forward retrains as it advances, so testing earlier does not permanently
+# cost training data -- only the first blocks train on less. At 5-day the sample
+# went from ~82 non-overlapping periods to ~181, halving the error bar.
+TEST_START = pd.Timestamp("2023-01-01")
+TEST_END = pd.Timestamp("2026-08-25")
 
 # Trading days between refits. 1 = retrain every day, 5 = once a week.
 RETRAIN_EVERY = 5
@@ -21,12 +24,34 @@ RETRAIN_EVERY = 5
 # Set it to 365 to use data for the recent year only
 TRAIN_WINDOW = None
 
-TARGET = "future_return_1d"
+# 5-day. Costs are paid once per hold instead of five times, which is what turns
+# a positive gross return into a positive net one. The price is ~82
+# non-overlapping scored periods against ~410 at 1-day, so the error bar widens
+# from +-0.38pp to +-0.63pp -- read the sign, not the magnitude. Moving
+# TEST_START back to 2023 would roughly double the sample.
+TARGET = "future_return_5d"
+
+# Classifier. Tested head to head against the regressor on the same 24 features
+# and window: the edge was near identical (+0.56pp vs +0.51pp) but the monthly
+# spread was 43% tighter (SD 0.0133 vs 0.0190), so t went 1.83 vs 1.32. Training
+# on the ordering gives a steadier ranking, not a bigger one.
+#
+# This one constant also flips xgboost_pipeline's estimator, PRED_THRESHOLD, and
+# whether rank_testing divides by volatility.
+TRAIN_TARGET = "beats_median_5d"
+HORIZON = 5
+
+# A regressor predicts a return, so its sign is the predicted direction. A
+# classifier predicts P(beats median), which lives in [0, 1] and crosses at 0.5
+# -- comparing that against 0 would mark every row as "up" and collapse the
+# directional edge to exactly the baseline.
+IS_CLASSIFIER = TRAIN_TARGET.startswith("beats_median")
+PRED_THRESHOLD = 0.5 if IS_CLASSIFIER else 0.0
 
 
-def directional_accuracy(y_true, y_pred):
+def directional_accuracy(y_true, y_pred, threshold=PRED_THRESHOLD):
     direction_accuracy = (
-        (y_pred > 0) == (y_true > 0)
+        (y_pred > threshold) == (y_true > 0)
     ).mean()
     return direction_accuracy
 
@@ -44,6 +69,34 @@ def rank_ic(y_true, y_pred):
     return 0.0 if np.isnan(correlation) else correlation
 
 
+def embargoed_splits(dates, n_splits=5, horizon=HORIZON):
+    """TimeSeriesSplit folds with the last `horizon` rows of each training fold
+    removed.
+
+    TimeSeriesSplit puts validation immediately after training, so with a
+    forward-looking target the last few training labels span the validation
+    period. Without the gap the grid search scores on partly-known answers and
+    picks whatever exploits that hardest.
+    """
+    from sklearn.model_selection import TimeSeriesSplit
+
+    unique_dates = np.sort(pd.unique(dates))
+    folds = []
+
+    for train_idx, test_idx in TimeSeriesSplit(n_splits=n_splits).split(unique_dates):
+        embargoed = train_idx[:-horizon] if len(train_idx) > horizon else train_idx
+
+        train_dates = set(unique_dates[embargoed])
+        test_dates = set(unique_dates[test_idx])
+
+        folds.append((
+            np.flatnonzero(dates.isin(train_dates)),
+            np.flatnonzero(dates.isin(test_dates)),
+        ))
+
+    return folds
+
+
 def load_data():
     data = pd.read_parquet(PROCESSED_PATH / "cleaned_output.parquet")
     data = data.sort_values(["date", "ticker"]).reset_index(drop=True)
@@ -59,23 +112,33 @@ def walk_forward(
     model,
     data,
     features,
-    target=TARGET,
+    target=TRAIN_TARGET,
     retrain_every=RETRAIN_EVERY,
     train_window=TRAIN_WINDOW,
     test_start=TEST_START,
     test_end=TEST_END,
+    horizon=HORIZON,
 ):
 
     in_test = (data["date"] >= test_start) & (data["date"] < test_end)
     test_dates = np.sort(data.loc[in_test, "date"].unique())
+
+    # Every horizon-th day, so the target windows never overlap. Refitting still
+    # walks every day -- only the days that get scored are thinned.
+    scored_dates = set(test_dates[::horizon])
 
     blocks = [
         test_dates[i:i + retrain_every]
         for i in range(0, len(test_dates), retrain_every)
     ]
 
-    print(f"\n{len(test_dates)} test days, {len(blocks)} refits, "
+    print(f"\n{len(test_dates)} test days, {len(scored_dates)} scored "
+          f"(every {horizon}), {len(blocks)} refits, "
+          f"{horizon}-day embargo, "
           f"train window: {'expanding' if train_window is None else str(train_window) + ' days'}")
+
+    # Needed to embargo in trading days rather than calendar days.
+    all_dates = np.sort(data["date"].unique())
 
     results = []
     start_time = time.time()
@@ -83,16 +146,36 @@ def walk_forward(
     for n, block in enumerate(blocks, 1):
         cutoff = block[0]
 
-        # Strictly earlier than the block being predicted, so nothing leaks.
-        train = data[data["date"] < cutoff]
-        if train_window is not None:
-            train = train[train["date"] >= cutoff - pd.Timedelta(days=train_window)]
+        # `date < cutoff` is not enough once the target looks forward. A row
+        # dated cutoff-1 carries a label spanning [cutoff-1, cutoff+4], so four
+        # of its five days sit inside the block about to be predicted -- and the
+        # label is a cross-sectional rank over that window, which is nearly the
+        # question being asked. Drop the last `horizon` trading days so no
+        # training label overlaps the test block at all.
+        cutoff_index = int(np.searchsorted(all_dates, cutoff))
+        embargo_index = max(0, cutoff_index - horizon)
+        train_end = all_dates[embargo_index]
 
-        test = data[data["date"].isin(block)].copy()
+        train = data[data["date"] < train_end]
+        if train_window is not None:
+            train = train[train["date"] >= train_end - pd.Timedelta(days=train_window)]
+
+        scored_in_block = [day for day in block if day in scored_dates]
+        if not scored_in_block:
+            continue
+
+        test = data[data["date"].isin(scored_in_block)].copy()
 
         fitted = clone(model)
         fitted.fit(train[features], train[target])
-        test["pred"] = fitted.predict(test[features])
+
+        # A classifier's probability of beating the median is the ranking score.
+        # It is better behaved than a regressor's raw output, whose magnitude
+        # tracks volatility rather than confidence.
+        if hasattr(fitted, "predict_proba"):
+            test["pred"] = fitted.predict_proba(test[features])[:, 1]
+        else:
+            test["pred"] = fitted.predict(test[features])
 
         results.append(test)
 
@@ -112,11 +195,16 @@ def report_walkforward(name, model_label, params, pooled, elapsed_time, final_mo
 
     test_acc = directional_accuracy(y_test, y_pred)
     baseline = always_up_accuracy(y_test)
-    test_r2 = r2_score(y_test, y_pred)
+
+    # R2 compares predictions to returns on the same scale. A probability is not
+    # on that scale, so it would report a large meaningless negative. Rank IC
+    # measures ordering and works for either.
+    test_r2 = float("nan") if IS_CLASSIFIER else r2_score(y_test, y_pred)
+    test_ic = rank_ic(y_test, y_pred)
 
     # Per-month view, so one lucky month cannot hide behind the yearly average.
     pooled = pooled.copy()
-    pooled["correct"] = (y_pred > 0) == (y_test > 0)
+    pooled["correct"] = (y_pred > PRED_THRESHOLD) == (y_test > 0)
     pooled["up"] = y_test > 0
 
     monthly = pooled.groupby(pooled["date"].dt.to_period("M")).agg(
@@ -157,6 +245,7 @@ def report_walkforward(name, model_label, params, pooled, elapsed_time, final_mo
         f.write(f"Directional Accuracy on Test Set: {test_acc:.4f}\n")
         f.write(f"Edge: {test_acc - baseline:+.4f}\n")
         f.write(f"R2 Score on Test Set: {test_r2:.4f}\n")
+        f.write(f"Rank IC on Test Set: {test_ic:.4f}\n")
         f.write(f"Months Beaten: {months_won}/{len(monthly)}\n")
         f.write(f"\nMONTH BY MONTH:\n")
         f.write(monthly.to_string(float_format=lambda v: f"{v:.4f}") + "\n")
@@ -167,6 +256,7 @@ def report_walkforward(name, model_label, params, pooled, elapsed_time, final_mo
     print(f"Directional Accuracy on Test Set: {test_acc:.4f}")
     print(f"Edge: {test_acc - baseline:+.4f}")
     print(f"R2 Score on Test Set: {test_r2:.4f}")
+    print(f"Rank IC on Test Set: {test_ic:.4f}")
     print(f"Months Beaten: {months_won}/{len(monthly)}")
     print(f"\n{monthly.to_string(float_format=lambda v: f'{v:.4f}')}")
     print(f"\nSaved to {run_path}")

@@ -130,7 +130,31 @@ def download_data(start, end, output_path) :
     
     return df
 
+# Index level, joined to every ticker by date. SPY for the market's own move and
+# as the benchmark the baskets are measured against, VIX for whether the tape is
+# calm or panicking -- the only feature here that speaks to regime rather than
+# direction.
+MARKET_TICKERS = ["SPY", "^VIX"]
+
+
+def download_market(start, end, output_path):
+    data = yf.download(" ".join(MARKET_TICKERS), start=start, end=end,
+                       interval="1d", group_by='tickers')
+    df = pd.DataFrame(data)
+
+    if df.empty:
+        print("WARNING: No market data was downloaded!")
+        return df
+
+    df.to_parquet(output_path, engine='pyarrow', compression='snappy')
+    print(f"Market data: {df.shape}")
+
+    return df
+
+
 if __name__ == "__main__":
-    output_data = download_data("2020-01-01", "2026-01-01", "data/raw_data/output.parquet")
+    output_data = download_data("2015-01-01", "2026-08-25", "data/raw_data/output.parquet")
     print("Data downloaded and saved.")
+    market_data = download_market("2015-01-01", "2026-08-25", "data/raw_data/market.parquet")
+    print("Market data downloaded and saved.")
 
