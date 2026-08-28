@@ -169,7 +169,11 @@ def walk_forward(
         embargo_index = max(0, cutoff_index - horizon)
         train_end = all_dates[embargo_index]
 
-        train = data[data["date"] < train_end]
+        # The processed panel now keeps the most recent rows, which have every
+        # feature but no future return yet. They are what predict.py scores;
+        # they must never reach training or scoring, where the label is the
+        # whole point.
+        train = data[(data["date"] < train_end) & data[target].notna()]
         if train_window is not None:
             train = train[train["date"] >= train_end - pd.Timedelta(days=train_window)]
 
@@ -177,7 +181,9 @@ def walk_forward(
         if not scored_in_block:
             continue
 
-        test = data[data["date"].isin(scored_in_block)].copy()
+        test = data[data["date"].isin(scored_in_block) & data[TARGET].notna()].copy()
+        if test.empty:
+            continue
 
         fitted = clone(model)
         fitted.fit(train[features], train[target])

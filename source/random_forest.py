@@ -317,7 +317,12 @@ if __name__ == "__main__":
             elapsed_time = time.time() - start_time
 
             # The model you would actually deploy: same params, fit on everything.
-            final_model = clone(model).fit(data[FEATURES], data[TRAIN_TARGET])
+            # The model predict.py loads. Fit on every labelled row, including
+            # the test period -- for live use you want all the data, and there
+            # is nothing left to bias. The unlabelled recent rows are dropped:
+            # those are the ones it will be asked to predict.
+            labelled = data[data[TRAIN_TARGET].notna()]
+            final_model = clone(model).fit(labelled[FEATURES], labelled[TRAIN_TARGET])
 
             test_acc, baseline, test_r2, run_name = report_walkforward(
                 name, model_label, params, pooled, elapsed_time, final_model

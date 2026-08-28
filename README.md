@@ -1,5 +1,5 @@
 # trading_ml
-This trading ml model aims to predict price movement and forward return in the next 5 days using OHLCV, fundamentals, and news sentiment. Trained on NASDAQ yFinance data.
+This trading ml model ranks NASDAQ stocks against each other and forms a long-only basket from the top-ranked, holding for 20 days. Built on OHLCV technicals, market context (SPY/VIX), earnings dates, and SEC EDGAR fundamentals. Trained on NASDAQ yFinance data.
 
 ### Version 1
 - Successfully extract and process OHLCV/fundamentals data from 20 liquid stocks on the NASDAQ
@@ -179,7 +179,7 @@ Results: the variance between different seeds is negligble, so I dropped seed av
 | 4 | SPY | +24.3% | **1.77** | - | - | - |
 | 5 | Top 15 | +24.1% | 1.19 | 93% | +1.85 pp | 2.19 |
 
-Top 1 has the greatest annual return, but a low sharpe (1.31) and average win-rate (54%) means that this pick carries a lot of risk.
+Top 1 has the greatest annual return, but the gap over Top 3 tests at **t = 0.51 (p = 0.61)** — indistinguishable from luck. It beat Top 3 in only 23 of 45 periods, a coin flip. With a single name there is no cushion: its worst period was **−13.7%** against Top 3's −9.1%, and one earnings surprise takes the full hit.
 
 Therefore, I choose top 3 as the highest yielding output with managed risk. For a low-risk alternative, choose top 15.
 
@@ -189,7 +189,7 @@ Therefore, I choose top 3 as the highest yielding output with managed risk. For 
 ### Conclusion
 
 - The **Top 3 strategy shows a meaningful ranking edge** over random selection.
-- It beats both **SPY and the equal-weight universe after costs**.
+- It **returned more than SPY and the equal-weight universe after costs** over this window (+33.8% vs +24.3% and +27.7%). This is what happened, not a proven repeatable edge — the gap over SPY tests at **t = 0.66 (p = 0.51)**, winning 20 of 45 periods. With 45 independent periods the ranking edge is significant; the return figures are not.
 - The strongest signal is the **+259.04 bps/period Top-minus-Bottom spread**, suggesting the ranking model is separating stronger and weaker stocks.
 - The main weakness is risk: **25.57% annualised volatility** is still well above the 17.3% target.
 - Overall, Top 3 is the strongest practical strategy candidate so far.

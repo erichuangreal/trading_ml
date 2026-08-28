@@ -8,10 +8,16 @@ from edgar_fundamentals import attach_edgar
 RAW_PATH = Path("data/raw_data")
 PROCESSED_PATH = Path("data/processed_data")
 
-# Forward-return horizons written into the processed panel: the ticker targets
-# (future_return_Nd, beats_median_Nd) and the SPY benchmark (spy_future_return_Nd).
-# Every horizon walkforward.HORIZON might be set to has to be listed here.
+# Forward-return horizons
 HORIZONS = [1, 5, 20]
+
+# Split-artifact detector. A daily move larger than SPLIT_MOVE that trades less
+# than SPLIT_VOLUME_SURGE times its recent average volume is treated as a feed
+# error rather than a market event. Genuine moves of that size are news, and
+# news brings volume -- MRNA's +177% on 2026-08-19 came with 50x normal volume
+# and is correctly left alone.
+SPLIT_MOVE = 0.5
+SPLIT_VOLUME_SURGE = 2.0
 
 NUMERIC_COLUMNS = [
     "open",
@@ -156,6 +162,36 @@ def clean_data(df):
         ["ticker", "date"]
     ).reset_index(drop=True)
 
+    # Split-adjustment artifacts. A one-day move above SPLIT_MOVE with no volume
+    # surge is not a market event -- a real move that size trades many times
+    # normal volume. It is the feed serving adjusted and unadjusted bars for the
+    # same ticker around a split, which is what MNST did around its 2026-08-11
+    # two-for-one: the close alternated between ~$47 and ~$93 for three weeks
+    # while volume stayed ordinary.
+    #
+    # Everything from the first bad bar onward is dropped for that ticker rather
+    # than just the flagged rows. Once the feed is inconsistent the neighbouring
+    # returns are wrong too, and removing single rows only hides the jump inside
+    # a larger gap. The ticker's earlier history is untouched and still usable.
+    returns = df.groupby("ticker")["close"].pct_change()
+    average_volume = df.groupby("ticker")["volume"].transform(
+        lambda s: s.rolling(20, min_periods=5).mean()
+    )
+
+    artifact = (
+        (returns.abs() > SPLIT_MOVE)
+        & (df["volume"] / average_volume < SPLIT_VOLUME_SURGE)
+    )
+
+    first_bad = df.loc[artifact].groupby("ticker")["date"].min()
+
+    suspect = pd.Series(False, index=df.index)
+    for artifact_ticker, start in first_bad.items():
+        suspect |= (df["ticker"] == artifact_ticker) & (df["date"] >= start)
+
+    number_split_artifacts = int(suspect.sum())
+    df = df.loc[~suspect].reset_index(drop=True)
+
     # Final validation
     assert not df.isna().any().any()
 
@@ -181,6 +217,12 @@ def clean_data(df):
     print(f"Duplicate rows removed: {number_duplicates}")
     print(f"Negative rows removed: {number_negative}")
     print(f"Invalid OHLC rows removed: {number_invalid_ohlc}")
+    print(f"Split-artifact rows removed: {number_split_artifacts}")
+
+    for artifact_ticker, start in first_bad.items():
+        print(f"  {artifact_ticker}: dropped from {start.date()} onward "
+              f"(suspected split-adjustment artifact)")
+
     print(f"Final rows: {len(df)}")
 
 
@@ -331,10 +373,6 @@ def extract_technicals(df) :
 
     # y predictors (forward returns). Every horizon is kept so TARGET can be
     # switched without reprocessing.
-    #
-    # The cost: dropna() below removes any row missing a target, so the longest
-    # horizon decides how much of the panel tail is lost -- 20 trading days per
-    # ticker rather than 5.
     for horizon in HORIZONS:
         df[f"future_return_{horizon}d"] = (
             df.groupby("ticker")["close"].shift(-horizon) / df["close"] - 1
@@ -354,14 +392,26 @@ def process_data(RAW_DATA_PATH, PROCESSED_DATA_PATH):
     print("Data cleaned successfully")
     df = extract_technicals(df)
     print("Technical indicators extracted successfully")
-    df = df.dropna().reset_index(drop=True)
+    # Drop rows missing an INPUT, keep rows missing only a target. The most
+    # recent HORIZON days have every feature but no future return yet. They're
+    # used in predict.py
+    target_columns = [
+        c for c in df.columns
+        if c.startswith("future_return") or c.startswith("beats_median")
+    ]
+    inputs = [c for c in df.columns if c not in target_columns]
+
+    df = df.dropna(subset=inputs).reset_index(drop=True)
     print("Null technical rows removed")
 
     # Beating the MEDIAN: did this ticker land in the better half of the day's returns.
     for horizon in HORIZONS:
-        df[f"beats_median_{horizon}d"] = (
+        future = df[f"future_return_{horizon}d"]
+        beats = (
             df.groupby("date")[f"future_return_{horizon}d"].rank(pct=True) > 0.5
-        ).astype(int)
+        ).astype(float)
+
+        df[f"beats_median_{horizon}d"] = beats.where(future.notna())
 
     # Merged after dropna so sparse extras cannot delete technical rows.
     market_path = RAW_PATH / "market.parquet"
