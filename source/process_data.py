@@ -162,17 +162,6 @@ def clean_data(df):
         ["ticker", "date"]
     ).reset_index(drop=True)
 
-    # Split-adjustment artifacts. A one-day move above SPLIT_MOVE with no volume
-    # surge is not a market event -- a real move that size trades many times
-    # normal volume. It is the feed serving adjusted and unadjusted bars for the
-    # same ticker around a split, which is what MNST did around its 2026-08-11
-    # two-for-one: the close alternated between ~$47 and ~$93 for three weeks
-    # while volume stayed ordinary.
-    #
-    # Everything from the first bad bar onward is dropped for that ticker rather
-    # than just the flagged rows. Once the feed is inconsistent the neighbouring
-    # returns are wrong too, and removing single rows only hides the jump inside
-    # a larger gap. The ticker's earlier history is untouched and still usable.
     returns = df.groupby("ticker")["close"].pct_change()
     average_volume = df.groupby("ticker")["volume"].transform(
         lambda s: s.rolling(20, min_periods=5).mean()
@@ -276,12 +265,6 @@ def extract_market_features(raw):
         "vix_vs_60d": vix / vix.rolling(window=60).mean() - 1,
     })
 
-    # Forward SPY returns -- a benchmark, never a feature. The equal-weight
-    # universe average is a hindsight portfolio: those 90 tickers are the 2026
-    # index members held back to 2023, so it contains only companies that stayed
-    # in. SPY is what someone could actually have bought.
-    #
-    # These look forward and must stay out of MARKET_FEATURES.
     for horizon in HORIZONS:
         market[f"spy_future_return_{horizon}d"] = spy.shift(-horizon) / spy - 1
 

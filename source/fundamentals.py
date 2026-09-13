@@ -9,10 +9,7 @@ import time
 
 RAW_PATH = Path("data/raw_data")
 
-# Must match what ticker_statements fetches. income_stmt is annual; switching to
-# quarterly means quarterly_income_stmt there and a shift of 4 in the growth
-# calculation -- and yfinance only served 7 quarters, which was not enough for
-# any TTM window.
+
 STATEMENT_FREQUENCY = "annual"
 
 # Days between period end and the filing being public. 10-Q is due in 40 days,
@@ -22,10 +19,7 @@ REPORTING_LAG_DAYS = 45 if STATEMENT_FREQUENCY == "quarterly" else 90
 # Periods back for the year-ago comparison: 4 quarters, or 1 year.
 YEAR_AGO_PERIODS = 4 if STATEMENT_FREQUENCY == "quarterly" else 1
 
-# Positions are excluded this many days either side of a report. Sized to the
-# holding period: a position entered today is held 5 days, so a report anywhere
-# in that window lands inside the trade. The move on an earnings day is dominated
-# by the surprise, which none of these features see.
+# Positions are excluded this many days either side of a report.
 EARNINGS_EXCLUSION_DAYS = 5
 
 FUNDAMENTAL_FEATURES = [

@@ -1,7 +1,62 @@
-# trading_ml
 This trading ml model ranks NASDAQ stocks against each other and forms a long-only basket from the top-ranked, holding for 20 days. Built on OHLCV technicals, market context (SPY/VIX), earnings dates, and SEC EDGAR fundamentals. Trained on NASDAQ yFinance data.
 
-### Version 1
+## Abstract
+Final model: Top 3, long only, 20-day hold, 34 features, inverse-volatility weighted with the 17.3% vol target. Sorting edge +1.85pp at t = 2.19, +33.8%/yr net against SPY's +24.3% and the universe's +27.7%.
+
+View log for details: [View full results](models/v4xgboost_walkforward_2026-08-26_22-53-59/rank_testing.log)
+
+## How to Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Then open `source/edgar_fundamentals.py` and replace the `USER_AGENT` email with your own contact address.
+
+## Running the pipeline
+- Run commands from root
+- Each data step writes to `data/raw_data` or `data/processed_data`
+- Steps must run in order
+
+```bash
+python source/extract_data.py         # download OHLCV + SPY/VIX market data from yfinance into data/raw_data
+python source/fundamentals.py         # download yfinance fundamentals into data/raw_data
+python source/edgar_fundamentals.py   # download EDGAR fundamentals (earnings, revenue, P/E ratio) into data/raw_data
+python source/process_data.py         # clean + preprocess raw_data -> data/processed_data
+```
+
+### Train a model
+
+```bash
+python source/random_forest.py
+```
+
+This walk-forward trains and evaluates XGBoost, then saves the fitted model, its predictions, and a `training.log` to a new timestamped directory under `models/`.
+
+To check how well a trained run actually ranks stocks against each other (median split, top-N spread, etc.), run:
+
+```bash
+python source/rank_testing.py
+```
+
+### Get today's picks
+
+```bash
+python source/predict.py
+```
+
+Before running:
+- Re-run `extract_data.py` and `process_data.py` first so predictions are scored on fresh prices.
+- Run it after 4pm ET. The script warns if today's bar looks like an unfinished session, but only run it once the market has actually closed.
+- Open `source/predict.py` and set `RUN_NAME` to the model directory under `models/` you want to use (defaults to the current best model).
+
+This prints the current top-ranked tickers, their position sizing (inverse-volatility weighted against a volatility target), and dollar allocation for the configured capital.
+
+To see what the model would have picked on a past date instead of the latest one, set `AS_OF` in `source/predict.py` to that date (e.g. `"2026-08-15"`) instead of `None`.
+
+## Version 1
 - Successfully extract and process OHLCV/fundamentals data from 20 liquid stocks on the NASDAQ
 - Test baseline and train random forest model
 
@@ -38,7 +93,7 @@ Always Up Accuracy: 0.5579
 Directional Accuracy on Test Set: 0.5842
 R2 Score on Test Set: 0.0648
 
-### Version 2
+## Version 2
 - Problems
 - Current technical indicators (EMAs, returns, and volatility) fail to consider stocks that have become overbought or near resistance/upper liquidity
 - Current dataset is too small (looking to lower timeframe or add more stocks)
@@ -97,7 +152,7 @@ Two tests:
 
 MODEL CONCLUSION: Ridge and RandomForest models will not be tested from now on as research proves that **XGBoost** is superior.
 
-### Version 3
+## Version 3
 - Implement fundamental metrics (earnings, dividends, P/E, etc.) in an attempt to increase model prediction accuracy through fundamental analyss
 - Added 2026 data to testing
 - No trading within N days of earnings reports, on both sides
@@ -147,7 +202,7 @@ Averaged across 5 seeds:
 
 Results: the variance between different seeds is negligble, so I dropped seed averaging and stuck to a constant SEED = 42
 
-### Version 4 - Currently the best-performing model
+## Version 4 - Currently the best-performing model
 - Previous models are consistently underperforming the NASDAQ ETF and SPY returns and this version managed to edge it out by ~7% at the cost of higher risk
 - Hold for 20 days instead of 5 (horizon and future returns are both 20d)
 - Split money by volatility (BIG):
@@ -157,7 +212,7 @@ Results: the variance between different seeds is negligble, so I dropped seed av
 4. Target 17.3% bumpiness. Never borrows (max 100%), never fully exits (min 20%).
 5. Top N stocks: investigates top 1, 3, and 15 tickers (Top 3 chosen. Top 1 earns more but the gap tests at t = 0.51 which indistinguishable from luck)
 
-## Compare to version 1, what got better
+### Compare to version 1, what got better
 
 | Metric | 5-Day (Old Best) | 20-Day (This Run) |
 |---|---:|---:|
@@ -165,11 +220,11 @@ Results: the variance between different seeds is negligble, so I dropped seed av
 | Top 3 Sharpe | 0.73 | **1.15** |
 | Sorting edge | +1.23pp | +1.85pp |
 
-## Results
+### Results
 - Compared against the SPY and NASDAQ (universe all 90).
 - Top 3 comes out on top
 
-## Strategy Performance Comparison
+### Strategy Performance Comparison
 
 | Rank | Strategy | Annual Return | Sharpe | Long on Average | Sorting Edge | t-stat |
 |---:|---|---:|---:|---:|---:|---:|
@@ -183,18 +238,13 @@ Top 1 has the greatest annual return, but the gap over Top 3 tests at **t = 0.51
 
 Therefore, I choose top 3 as the highest yielding output with managed risk. For a low-risk alternative, choose top 15.
 
-## Top 3 Result
+### Top 3 Result
 ![Top 3 XGBoost Strategy Results](best_working_model.png)
 
-### Conclusion
+## Conclusion
 
 - The **Top 3 strategy shows a meaningful ranking edge** over random selection.
 - It **returned more than SPY and the equal-weight universe after costs** over this window (+33.8% vs +24.3% and +27.7%). This is what happened, not a proven repeatable edge — the gap over SPY tests at **t = 0.66 (p = 0.51)**, winning 20 of 45 periods. With 45 independent periods the ranking edge is significant; the return figures are not.
 - The strongest signal is the **+259.04 bps/period Top-minus-Bottom spread**, suggesting the ranking model is separating stronger and weaker stocks.
 - The main weakness is risk: **25.57% annualised volatility** is still well above the 17.3% target.
 - Overall, Top 3 is the strongest practical strategy candidate so far.
-
-### Abstract
-Final model: Top 3, long only, 20-day hold, 34 features, inverse-volatility weighted with the 17.3% vol target. Sorting edge +1.85pp at t = 2.19, +33.8%/yr net against SPY's +24.3% and the universe's +27.7%.
-
-View log for details: [View full results](models/v4xgboost_walkforward_2026-08-26_22-53-59/rank_testing.log)

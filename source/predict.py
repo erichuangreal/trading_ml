@@ -28,6 +28,9 @@ from rank_testing import (
 # Select the model you want to use: the exact run directory name under models/.
 RUN_NAME = "v4xgboost_walkforward_2026-08-26_22-53-59"
 
+# Score picks as of this date. If None, uses the latest date in the data.
+AS_OF = None
+
 # Basket size. 3 is the best model so far.
 TOP_N = TOP_N_VALUES[1] if len(TOP_N_VALUES) > 1 else TOP_N_VALUES[0]
 
@@ -89,13 +92,23 @@ def check_bar_complete(data, as_of):
     return median_ratio
 
 
-def todays_picks(run_name=RUN_NAME, n=TOP_N, capital=CAPITAL):
+def todays_picks(run_name=RUN_NAME, n=TOP_N, capital=CAPITAL, as_of=AS_OF):
     run_dir = MODELS_PATH / run_name
 
     data = pd.read_parquet(PROCESSED_PATH / "cleaned_output.parquet")
     model = load(run_dir / "model.joblib")
 
-    as_of = data["date"].max()
+    if as_of is None:
+        as_of = data["date"].max()
+    else:
+        as_of = pd.Timestamp(as_of)
+        if as_of not in data["date"].values:
+            latest = data["date"].max()
+            raise ValueError(
+                f"{as_of.date()} is not in the data (earliest: "
+                f"{data['date'].min().date()}, latest: {latest.date()})"
+            )
+
     day = data[data["date"] == as_of].copy()
 
     if day[TRAIN_TARGET].notna().any():

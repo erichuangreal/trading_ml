@@ -23,32 +23,16 @@ from walkforward import IS_CLASSIFIER, HORIZON, TARGET
 
 MODELS_PATH = Path("models")
 
-# HORIZON and TARGET come from walkforward rather than being restated here.
-# They have to agree: the scored days are spaced HORIZON apart, so each row is
-# one full holding period and PERIODS_PER_YEAR below annualises off it. A local
-# copy silently mis-annualises every return in this file when the horizon moves.
-
-# Scored at several basket sizes because they answer different questions. 3 is
-# what is realistic to actually hold, but with only 3 names a day the spread's
-# standard error swamps its mean and no result is readable. 15 diversifies away
-# the single-name noise and shows whether the ranking works at all.
-# The first entry drives the monthly table and the best/worst day listings.
 TOP_N_VALUES = [1, 3, 15]
 TOP_N = TOP_N_VALUES[0]
 
-# Whether to drop names reporting within EARNINGS_EXCLUSION_DAYS from the pick
-# pool. Affects the top-N block only -- the median split scores every row.
-#
-# Computed here from days_to/since_earnings rather than read from the parquet's
-# near_earnings column, so the window can be changed without reprocessing.
+# Whether to drop names that have reports coming out within EARNINGS_EXCLUSION_DAYS
 EXCLUDE_NEAR_EARNINGS = True
 EARNINGS_EXCLUSION_DAYS = 5
 
 TRADING_DAYS = 252
 
-# Long the top N and nothing else. The short leg was inverted -- bottom picks
-# outran top picks while both beat the universe -- so it was subtracting from a
-# working long book.
+# Long the top N.
 LONG_ONLY = True
 
 # The investable benchmark. The universe average is equal-weighted over the 2026
@@ -56,22 +40,12 @@ LONG_ONLY = True
 # someone could actually have bought over the same period.
 BENCHMARK_COLUMN = f"spy_future_return_{HORIZON}d"
 
-# Round-trip cost of turning the whole book over once, as a fraction of capital.
+# Round-trip cost of turning the whole book over once.
 # 15 bps is mid-range for liquid US large caps once spread, commission and
-# slippage are counted. Proportional to dollars traded, not to the number of
-# names -- splitting the same capital across 15 tickers means 15 positions of
-# 1/15th the size, so the total stays 15 bps.
+# slippage are counted. Proportional to dollars traded.
 ROUND_TRIP_COST = 0.0015
 
-# --- position sizing ---------------------------------------------------------
-# Equal weight on the top N gives the highest-volatility name in the basket the
-# biggest say in the period's return, which is backwards: the ranking says which
-# names to hold, it says nothing about how much risk each deserves. Weighting by
-# 1 / volatility_20d equalises the risk contribution instead.
-#
-# This is a sizing decision, not a ranking one -- finding 6 (dividing a
-# classifier's pred by volatility collapses the ranking to "lowest volatility
-# first") is about the score, and the score is untouched.
+# Weighting by 1 / volatility_20d equalises the risk contribution.
 VOL_WEIGHTED = True
 
 # Annualised volatility the long-only basket is sized to, or None to hold it
@@ -80,27 +54,17 @@ VOL_WEIGHTED = True
 # match. Targeting spends no signal.
 VOL_TARGET = 0.173
 
-# Cap at 1.0 = never borrow, so this can only de-risk. Raise it to let quiet
-# periods lever up, which is where most of the Sharpe gain in vol targeting
-# usually comes from -- but that is a separate decision with a margin cost.
+# Periods per year
+PERIODS_PER_YEAR = TRADING_DAYS / HORIZON
+
+# Cap at 1.0 = never borrow, floor at 0.2 = never go below 20% of normal size.
 MAX_EXPOSURE = 1.0
 MIN_EXPOSURE = 0.2
 
-# Hedging the market out was tested and removed. Shorting SPY against the long
-# book cut volatility from 25.6% to 11.9% but took the return from +33.8% to
-# +5.4% a year, and the Sharpe fell from +1.15 to +0.44 -- worse on margin too,
-# so it was not the funding that killed it. Most of the book's return comes from
-# the market exposure, not from the selection; the ranking edge is real but too
-# thin to carry a book on its own. Do not re-add without new evidence.
-
-# Periods per year, and so the annualisation factor. One position per horizon.
-PERIODS_PER_YEAR = TRADING_DAYS / HORIZON
-
-# Trailing window used to estimate the basket's own volatility, in periods --
-# about a year either way, so it tracks regime without chasing single periods.
+# Trailing window used to estimate the basket's own volatility.
+# This determines our exposure (which we scale earlier, look above)
 VOL_LOOKBACK = max(6, int(round(PERIODS_PER_YEAR)))
 VOL_MIN_PERIODS = max(4, VOL_LOOKBACK // 4)
-
 
 # Long-only puts all capital on one side. A long/short book splits it, so its
 # return is half the top-minus-bottom spread.

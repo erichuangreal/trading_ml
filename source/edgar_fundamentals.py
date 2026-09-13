@@ -30,15 +30,11 @@ RAW_PATH = Path("data/raw_data")
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
-# The SEC blocks requests without a descriptive User-Agent naming a contact.
-# Put your own email here -- they will rate-limit or ban the placeholder.
+# Put your own email here.
 USER_AGENT = "trading_ml research huangheeh@gmail.com"
 
-# SEC allows 10 requests/second. This stays comfortably under.
 REQUEST_DELAY = 0.15
 
-# A quarterly fact covers ~90 days. Filters out the annual and half-year
-# durations that share the same tags.
 QUARTER_DAYS = (80, 100)
 
 # us-gaap tags, in preference order.
@@ -79,10 +75,7 @@ def session():
     return handle
 
 
-# company_tickers.json lists current registrants only, so a company that has
-# since deregistered -- taken private, acquired -- drops out even though its
-# filings are still on EDGAR. Look the CIK up at sec.gov/cgi-bin/browse-edgar by
-# company name and add it here.
+# company_tickers.json lists current registrants only.
 MANUAL_CIK = {
     # "EA": "0000712515",
 }

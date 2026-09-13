@@ -218,13 +218,8 @@ def tune_xgboost(train_data, test_data):
     x_test = test_data[FEATURES]
     y_test = test_data[TARGET]
 
-    # Built by the same factory the walk-forward uses, so the estimator being
-    # tuned is the one that gets run. Constructing it inline meant tuning an
-    # XGBRegressor and then walking forward with an XGBClassifier.
-    pipeline = xgboost_pipeline()
 
-    # make_pipeline names the step after the class, so a classifier changes the
-    # prefix from xgbregressor__ to xgbclassifier__.
+    pipeline = xgboost_pipeline()
     prefix = pipeline.steps[-1][0]
 
     param_grid = {
@@ -245,9 +240,6 @@ def tune_xgboost(train_data, test_data):
 
     best_model = grid_search.best_estimator_
 
-    # A classifier's class labels are not a ranking -- its probability is. And
-    # its .score() is accuracy, which cannot be computed against continuous
-    # returns at all.
     if hasattr(best_model, "predict_proba"):
         y_pred = best_model.predict_proba(x_test)[:, 1]
         test_r2 = float("nan")
@@ -316,11 +308,6 @@ if __name__ == "__main__":
             pooled = walk_forward(model, data, FEATURES)
             elapsed_time = time.time() - start_time
 
-            # The model you would actually deploy: same params, fit on everything.
-            # The model predict.py loads. Fit on every labelled row, including
-            # the test period -- for live use you want all the data, and there
-            # is nothing left to bias. The unlabelled recent rows are dropped:
-            # those are the ones it will be asked to predict.
             labelled = data[data[TRAIN_TARGET].notna()]
             final_model = clone(model).fit(labelled[FEATURES], labelled[TRAIN_TARGET])
 

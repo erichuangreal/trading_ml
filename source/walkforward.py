@@ -28,19 +28,6 @@ RETRAIN_EVERY = 20
 TRAIN_WINDOW = None
 
 
-# 20-day. The gap to buy-and-hold is a cost and volatility gap, not a signal
-# gap: at 5-day the book turns over ~50 times a year at 15bps, at 20-day ~12.
-# The market, EDGAR and earnings features were worth +1.09pp at 5-day and
-# nothing at 1-day, so they should keep gaining as the horizon lengthens --
-# this tests that extrapolation and the cost cut at once.
-#
-# The price is sample size: ~45 non-overlapping periods over 2023-2026 against
-# 182 at 5-day, so the error bar roughly doubles. Read the sign and the t-stat,
-# not the magnitude.
-#
-# HORIZON drives everything downstream -- TARGET, TRAIN_TARGET, the embargo
-# width, the scored-day spacing, and rank_testing's annualisation. Every value
-# used here must appear in process_data.HORIZONS.
 HORIZON = 20
 
 TARGET = f"future_return_{HORIZON}d"
